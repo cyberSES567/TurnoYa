@@ -15,7 +15,7 @@ export const CONFIG = {
   // 2) Correo del dueño. Debe ser el correo con el que inicias sesión con Google.
   //    OJO: Gmail NO permite "$" en las direcciones, así que "adminegocio1923$@gmail.com"
   //    no existe. Usa el real. También debe coincidir con firestore.rules.
-  ownerEmail: "adminegocio1923@gmail.com",
+  ownerEmail: "adminnegocio1923@gmail.com",
 
   restaurantName: "Sabor Express",
   currency: "S/",
