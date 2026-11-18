@@ -254,21 +254,18 @@ function nav() {
 }
 
 /* ====================== LOGIN ====================== */
+/* ⚠️ CAMBIO #1: se eliminaron los botones rápidos de Dueño/Receptor/Cliente
+   y la sección informativa de roles. Solo queda login por Google (Firebase)
+   o el formulario manual de correo/nombre (modo demo). */
 function loginView() {
   const login = isCloud
     ? `<button class="btn big gbtn" data-act="login"><i>G</i> Continuar con Google</button>`
     : `<form class="card demo" data-form="demoLogin">
         <b>Modo demo</b>
-        <p class="muted">Sin Firebase: los datos viven en este navegador. Abre varias pestañas para simular cliente, receptor y dueño.</p>
+        <p class="muted">Sin Firebase: los datos viven en este navegador. Configura Firebase para sincronizar entre dispositivos.</p>
         <label class="lbl">Correo<input name="email" type="email" required placeholder="tucorreo@gmail.com"></label>
         <label class="lbl">Nombre<input name="name" placeholder="Tu nombre"></label>
         <button class="btn full">Entrar</button>
-        <div class="quick">
-          <button type="button" class="btn ghost sm" data-act="demoLogin" data-email="${esc(OWNER)}" data-name="Dueño">👑 Dueño</button>
-          <button type="button" class="btn ghost sm" data-act="demoLogin" data-email="receptor1@demo.com" data-name="Rita Receptora">🧑‍🍳 Receptor 1</button>
-          <button type="button" class="btn ghost sm" data-act="demoLogin" data-email="receptor2@demo.com" data-name="Raúl Receptor">🧑‍🍳 Receptor 2</button>
-          <button type="button" class="btn ghost sm" data-act="demoLogin" data-email="cliente@demo.com" data-name="Carlos Cliente">🙋 Cliente</button>
-        </div>
       </form>`;
   return `<header class="top"><div class="brand">TurnoYa<small>${esc(CONFIG.restaurantName)}</small></div></header>
   <section class="hero">
@@ -276,11 +273,6 @@ function loginView() {
     <h1>Pide. Te toman en menos de 3 minutos.</h1>
     <p>Pedidos en tiempo real, aviso sonoro cuando tu pedido es confirmado y listo, y un panel que mide qué tan rápido atiende cada persona del equipo.</p>
     ${login}
-  </section>
-  <section class="roles">
-    <div class="card"><div class="e">🙋</div><h3>Cliente</h3><p class="muted">Pide desde su mesa, sigue el estado en vivo y deja su reseña al terminar.</p></div>
-    <div class="card"><div class="e">🧑‍🍳</div><h3>Receptor</h3><p class="muted">Recibe pedidos con alarma y cronómetro. Meta: tomarlo antes de ${CONFIG.acceptSlaSeconds / 60} minutos.</p></div>
-    <div class="card"><div class="e">👑</div><h3>Dueño / Admin</h3><p class="muted">Gestiona equipo, menú y clientes, y mide rendimiento y reseñas.</p></div>
   </section>`;
 }
 
@@ -498,7 +490,8 @@ const fail = (e) => { console.error(e); toast(e?.code === "permission-denied" ? 
 
 const A = {
   async login() { try { await data.login(); } catch (e) { if (e?.code !== "auth/popup-closed-by-user") toast("No se pudo iniciar sesión: " + (e.code || e.message), "bad"); } },
-  demoLogin: (d) => data.login({ email: d.email, name: d.name }),
+  // ⚠️ CAMBIO #1: se eliminó A.demoLogin (ya no hay botones que lo llamen).
+  //    F.demoLogin sigue existiendo porque el formulario manual lo usa.
   logout: () => data.logout(),
   notif: () => Notification.requestPermission().then(render),
   tab(d) { S.tab = d.t; render(); scrollTo(0, 0); },
@@ -532,6 +525,7 @@ const A = {
 };
 
 const F = {
+  // F.demoLogin sigue en uso: lo dispara el formulario manual de modo demo.
   demoLogin(f) { const v = new FormData(f); data.login({ email: v.get("email"), name: v.get("name") }); },
 
   async placeOrder(f) {
