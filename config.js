@@ -3,18 +3,18 @@
 // ============================================================
 
 export const CONFIG = {
-  // 1) Pega aquí la config de tu app web de Firebase (Consola → Configuración del proyecto).
-  //    Si dejas apiKey vacío, la app corre en MODO DEMO (datos locales en el navegador).
+  // Datos reales de tu proyecto de Firebase (turnoya-c49a0)
   firebase: {
-    apiKey: "",
-    authDomain: "",
-    projectId: "",
-    appId: "",
+    apiKey: "AIzaSyCHjJIVkPCKa9Yy54_0nu0jNZqcFwO_Do",
+    authDomain: "turnoya-c49a0.firebaseapp.com",
+    projectId: "turnoya-c49a0",
+    storageBucket: "turnoya-c49a0.firebasestorage.app",
+    messagingSenderId: "1037565797476",
+    appId: "1:1037565797476:web:5058ef58f167c71150eb71",
+    measurementId: "G-KFM9PVBKVC"
   },
 
-  // 2) Correo del dueño. Debe ser el correo con el que inicias sesión con Google.
-  //    OJO: Gmail NO permite "$" en las direcciones, así que "adminegocio1923$@gmail.com"
-  //    no existe. Usa el real. También debe coincidir con firestore.rules.
+  // ⚠️ IMPORTANTE: Este correo debe ser EXACTAMENTE el mismo que pusiste en las reglas de Firestore.
   ownerEmail: "adminnegocio1923@gmail.com",
 
   restaurantName: "Sabor Express",
@@ -23,8 +23,7 @@ export const CONFIG = {
   // Meta: un pedido debe ser TOMADO en menos de este tiempo (segundos).
   acceptSlaSeconds: 180,
 
-  // Tiempo de espera típico SIN el sistema (minutos). Solo para mostrar el % de mejora
-  // en el panel. Cámbialo por el dato real que midan en su demo.
+  // Tiempo de espera típico SIN el sistema (minutos).
   baselineWaitMin: 8,
 };
 
