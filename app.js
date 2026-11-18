@@ -128,7 +128,6 @@ data.onAuth((user) => {
     authUnsubs.push(data.watchDoc("staff", user.email, (d) => { staffDoc = d; gotS = true; resolve(); }));
   } else resolve();
 
-  // Sincroniza el reloj con el servidor (importante: celulares con hora distinta)
   authUnsubs.push(data.watchDoc("users", user.uid, (u, meta) => {
     if (u && typeof u.seen === "number" && !(meta && meta.pending)) S.offset = u.seen - Date.now();
   }));
@@ -164,7 +163,7 @@ async function seedMenuIfEmpty(rows) {
 }
 
 function onOrders(rows) {
-  if (seen === null) { // primera carga: no suena nada
+  if (seen === null) {
     seen = new Set(rows.map((o) => o.id));
     prevStatus = Object.fromEntries(rows.map((o) => [o.id, o.status]));
     return;
@@ -254,25 +253,36 @@ function nav() {
 }
 
 /* ====================== LOGIN ====================== */
-/* ⚠️ CAMBIO #1: se eliminaron los botones rápidos de Dueño/Receptor/Cliente
-   y la sección informativa de roles. Solo queda login por Google (Firebase)
-   o el formulario manual de correo/nombre (modo demo). */
 function loginView() {
-  const login = isCloud
-    ? `<button class="btn big gbtn" data-act="login"><i>G</i> Continuar con Google</button>`
-    : `<form class="card demo" data-form="demoLogin">
-        <b>Modo demo</b>
-        <p class="muted">Sin Firebase: los datos viven en este navegador. Configura Firebase para sincronizar entre dispositivos.</p>
-        <label class="lbl">Correo<input name="email" type="email" required placeholder="tucorreo@gmail.com"></label>
-        <label class="lbl">Nombre<input name="name" placeholder="Tu nombre"></label>
-        <button class="btn full">Entrar</button>
-      </form>`;
+  const loginForm = `
+    <div class="card" style="max-width:420px;margin:0 auto;text-align:left">
+      <form data-form="emailAuth">
+        <h3 style="margin-bottom:12px">Acceso con correo</h3>
+        <label class="lbl">Correo
+          <input name="email" type="email" required placeholder="tucorreo@gmail.com">
+        </label>
+        <label class="lbl">Contraseña
+          <input name="password" type="password" required minlength="6" placeholder="Mínimo 6 caracteres">
+        </label>
+        <label class="lbl" id="nameField" style="display:none">Nombre completo (para registrarte)
+          <input name="name" placeholder="Tu nombre">
+        </label>
+        <div class="row" style="margin-top:12px">
+          <button class="btn full" type="submit" value="login" name="mode">Iniciar sesión</button>
+          <button class="btn ghost full" type="submit" value="register" name="mode" id="btnReg">Registrarme</button>
+        </div>
+      </form>
+      <button class="btn ghost full sm" type="button" data-act="resetPass" style="margin-top:12px">¿Olvidaste tu contraseña?</button>
+    </div>
+  `;
+  
   return `<header class="top"><div class="brand">TurnoYa<small>${esc(CONFIG.restaurantName)}</small></div></header>
   <section class="hero">
     <span class="pill">Reto: reducir los tiempos de espera en restaurantes</span>
     <h1>Pide. Te toman en menos de 3 minutos.</h1>
     <p>Pedidos en tiempo real, aviso sonoro cuando tu pedido es confirmado y listo, y un panel que mide qué tan rápido atiende cada persona del equipo.</p>
-    ${login}
+    ${isCloud ? `<button class="btn big gbtn" data-act="login" style="margin-bottom:20px"><i>G</i> Continuar con Google</button>` : ""}
+    ${loginForm}
   </section>`;
 }
 
@@ -490,8 +500,6 @@ const fail = (e) => { console.error(e); toast(e?.code === "permission-denied" ? 
 
 const A = {
   async login() { try { await data.login(); } catch (e) { if (e?.code !== "auth/popup-closed-by-user") toast("No se pudo iniciar sesión: " + (e.code || e.message), "bad"); } },
-  // ⚠️ CAMBIO #1: se eliminó A.demoLogin (ya no hay botones que lo llamen).
-  //    F.demoLogin sigue existiendo porque el formulario manual lo usa.
   logout: () => data.logout(),
   notif: () => Notification.requestPermission().then(render),
   tab(d) { S.tab = d.t; render(); scrollTo(0, 0); },
@@ -502,6 +510,14 @@ const A = {
   openReview: (d) => openReview(d.id),
   star(d) { S.rv.n = Number(d.n); $modal.querySelectorAll(".star").forEach((b) => b.classList.toggle("on", Number(b.dataset.n) <= S.rv.n)); },
   async cancelOrder(d) { if (confirm("¿Cancelar este pedido?")) data.set("orders", d.id, { status: "cancelado" }).catch(fail); },
+  
+  resetPass() {
+    const email = prompt("Escribe tu correo para enviarte el enlace de recuperación:");
+    if (!email) return;
+    data.resetPassword(email.trim())
+      .then(() => toast("Revisa tu correo para restablecer la contraseña", "ok"))
+      .catch((e) => toast("Error: " + e.message, "bad"));
+  },
 
   // receptor
   async take(d) {
@@ -525,8 +541,36 @@ const A = {
 };
 
 const F = {
-  // F.demoLogin sigue en uso: lo dispara el formulario manual de modo demo.
-  demoLogin(f) { const v = new FormData(f); data.login({ email: v.get("email"), name: v.get("name") }); },
+  async emailAuth(f, submitter) {
+    const v = new FormData(f);
+    const email = String(v.get("email")).trim();
+    const password = String(v.get("password"));
+    const name = String(v.get("name") || "").trim();
+    const mode = submitter?.value || "login";
+
+    const btn = f.querySelector('button[type="submit"]');
+    if (btn) btn.disabled = true;
+
+    try {
+      if (mode === "register") {
+        await data.register(email, password, name || email);
+        toast("Cuenta creada. ¡Bienvenido!", "ok");
+      } else {
+        await data.loginEmail(email, password);
+        toast("Sesión iniciada", "ok");
+      }
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      const msg =
+        e.code === "auth/email-already-in-use" ? "Ese correo ya está registrado" :
+        e.code === "auth/weak-password" ? "La contraseña es muy débil (mínimo 6)" :
+        e.code === "auth/invalid-credential" ? "Correo o contraseña incorrectos" :
+        e.code === "auth/user-not-found" ? "No existe una cuenta con ese correo" :
+        e.code === "auth/wrong-password" ? "Contraseña incorrecta" :
+        "Error al autenticar: " + e.message;
+      toast(msg, "bad");
+    }
+  },
 
   async placeOrder(f) {
     const v = new FormData(f);
@@ -603,11 +647,12 @@ document.addEventListener("click", (e) => {
   const fn = A[el.dataset.act];
   fn && fn(el.dataset, el, e);
 });
+
 document.addEventListener("submit", (e) => {
   const f = e.target.closest("form[data-form]");
   if (!f) return;
   e.preventDefault();
-  F[f.dataset.form]?.(f);
+  F[f.dataset.form]?.(f, e.submitter);
 });
 
 render();
