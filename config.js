@@ -5,7 +5,7 @@
 export const CONFIG = {
   // Datos reales de tu proyecto de Firebase (turnoya-c49a0)
   firebase: {
-    apiKey: "AIzaSyCHjJIVkPCKa9Yy54_0nu0jNZqcFwO_Do",
+    apiKey: "AIzaSyCHJjVIKvPCKa9Yy54_0nu0jNZqcFwO_Do",
     authDomain: "turnoya-c49a0.firebaseapp.com",
     projectId: "turnoya-c49a0",
     storageBucket: "turnoya-c49a0.firebasestorage.app",
