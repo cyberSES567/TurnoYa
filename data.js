@@ -35,6 +35,17 @@ if (isCloud) {
     onAuth: (cb) => authM.onAuthStateChanged(auth, (u) => cb(toUser(u))),
     login: () => authM.signInWithPopup(auth, new authM.GoogleAuthProvider()),
     logout: () => authM.signOut(auth),
+
+    // ── NUEVO: Autenticación con Email/Password ──
+    register: async (email, password, name) => {
+      const cred = await authM.createUserWithEmailAndPassword(auth, email, password);
+      if (name) await authM.updateProfile(cred.user, { displayName: name });
+      return cred.user;
+    },
+    loginEmail: (email, password) =>
+      authM.signInWithEmailAndPassword(auth, email, password),
+    resetPassword: (email) => authM.sendPasswordResetEmail(auth, email),
+
     watch(col, cb, where) {
       let q = fs.collection(db, col);
       if (where) q = fs.query(q, fs.where(where[0], "==", where[1]));
@@ -56,21 +67,17 @@ if (isCloud) {
     stamp: () => fs.serverTimestamp(),
   };
 } else {
-  // ---------- MODO DEMO: localStorage + evento "storage" entre pestañas ----------
+  // ---------- MODO DEMO ----------
   const KEY = "turnoya_demo_db";
   const load = () => {
-    try {
-      return JSON.parse(localStorage.getItem(KEY)) || {};
-    } catch {
-      return {};
-    }
+    try { return JSON.parse(localStorage.getItem(KEY)) || {}; }
+    catch { return {}; }
   };
   const save = (d) => localStorage.setItem(KEY, JSON.stringify(d));
   const subs = new Set();
   const ping = () => subs.forEach((f) => f());
   window.addEventListener("storage", (e) => e.key === KEY && ping());
 
-  // Semilla inicial
   const seed = load();
   if (!seed.menu) {
     seed.menu = {};
@@ -84,9 +91,7 @@ if (isCloud) {
 
   const authSubs = new Set();
   let current = null;
-  try {
-    current = JSON.parse(sessionStorage.getItem("turnoya_demo_user"));
-  } catch {}
+  try { current = JSON.parse(sessionStorage.getItem("turnoya_demo_user")); } catch {}
   const emit = () => authSubs.forEach((f) => f(current));
 
   impl = {
@@ -106,6 +111,20 @@ if (isCloud) {
       sessionStorage.removeItem("turnoya_demo_user");
       emit();
     },
+    register: async (email, password, name) => {
+      current = { uid: "u_" + email, email: email.toLowerCase(), name: name || email, photo: "" };
+      sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
+      emit();
+      return current;
+    },
+    loginEmail: async (email, password) => {
+      const u = { uid: "u_" + email, email: email.toLowerCase(), name: email, photo: "" };
+      sessionStorage.setItem("turnoya_demo_user", JSON.stringify(u));
+      current = u;
+      emit();
+      return u;
+    },
+    resetPassword: async () => { throw new Error("No disponible en modo demo"); },
     watch(col, cb, where) {
       const run = () => {
         let rows = Object.entries(load()[col] || {}).map(([id, v]) => ({ id, ...v }));
