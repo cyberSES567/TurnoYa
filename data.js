@@ -2,7 +2,7 @@
 import { CONFIG, DEFAULT_MENU } from "./config.js";
 
 // ⚠️ DATOS DE CLOUDINARY CONFIGURADOS
-const CLOUDINARY_CLOUD_NAME = "p8szlpdy"; 
+const CLOUDINARY_CLOUD_NAME = "p6szlpdy"; 
 const CLOUDINARY_UPLOAD_PRESET = "turnoya_menu"; 
 
 export const isCloud = Boolean(CONFIG.firebase && CONFIG.firebase.apiKey);
