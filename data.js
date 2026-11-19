@@ -1,5 +1,9 @@
-// Capa de datos: Firebase (tiempo real, multi-dispositivo) o modo demo local.
+// Capa de datos: Firebase (tiempo real) + Cloudinary (imágenes) o modo demo local.
 import { CONFIG, DEFAULT_MENU } from "./config.js";
+
+// ⚠️ DATOS DE CLOUDINARY CONFIGURADOS
+const CLOUDINARY_CLOUD_NAME = "p8szlpdy"; 
+const CLOUDINARY_UPLOAD_PRESET = "turnoya_menu"; 
 
 export const isCloud = Boolean(CONFIG.firebase && CONFIG.firebase.apiKey);
 let impl;
@@ -34,7 +38,7 @@ if (isCloud) {
   impl = {
     onAuth: (cb) => authM.onAuthStateChanged(auth, (u) => cb(toUser(u))),
     login: () => authM.signInWithPopup(auth, new authM.GoogleAuthProvider()),
-    loginGuest: () => authM.signInAnonymously(auth), // <-- NUEVO: Login Invitado
+    loginGuest: () => authM.signInAnonymously(auth),
     logout: () => authM.signOut(auth),
 
     register: async (email, password, name) => {
@@ -45,6 +49,26 @@ if (isCloud) {
     loginEmail: (email, password) =>
       authM.signInWithEmailAndPassword(auth, email, password),
     resetPassword: (email) => authM.sendPasswordResetEmail(auth, email),
+
+    // ── Subir Imágenes a Cloudinary ──
+    uploadImage: async (file) => {
+      const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+
+      const response = await fetch(url, {
+        method: "POST",
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error("Error al subir la imagen a Cloudinary");
+      }
+
+      const data = await response.json();
+      return data.secure_url; // Retorna la URL pública de la imagen
+    },
 
     watch(col, cb, where) {
       let q = fs.collection(db, col);
@@ -131,6 +155,15 @@ if (isCloud) {
       return u;
     },
     resetPassword: async () => { throw new Error("No disponible en modo demo"); },
+    
+    uploadImage: async (file) => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+    },
+
     watch(col, cb, where) {
       const run = () => {
         let rows = Object.entries(load()[col] || {}).map(([id, v]) => ({ id, ...v }));
