@@ -52,23 +52,25 @@ if (isCloud) {
 
     // ── Subir Imágenes a Cloudinary ──
     uploadImage: async (file) => {
-      const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+  const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
 
-      const response = await fetch(url, {
-        method: "POST",
-        body: formData
-      });
+  const response = await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
 
-      if (!response.ok) {
-        throw new Error("Error al subir la imagen a Cloudinary");
-      }
+  const data = await response.json().catch(() => ({}));
 
-      const data = await response.json();
-      return data.secure_url; // Retorna la URL pública de la imagen
-    },
+  if (!response.ok) {
+    console.error("Cloudinary error:", response.status, data);
+    throw new Error(data?.error?.message || `HTTP ${response.status} al subir imagen`);
+  }
+
+  return data.secure_url;
+},
 
     watch(col, cb, where) {
       let q = fs.collection(db, col);
