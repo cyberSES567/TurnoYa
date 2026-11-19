@@ -114,7 +114,7 @@ data.onAuth((user) => {
   if (!user) return render();
 
   const owner = user.email === OWNER;
-  let banned = null, staffDoc = null, gotB = owner, gotS = owner;
+  let banned = null, staffDoc = null, gotB = owner || !user.email, gotS = owner || !user.email;
   const resolve = () => {
     if (my !== seq || !gotB || !gotS) return;
     const role = owner ? "admin" : banned ? "baneado" : staffDoc && staffDoc.active ? staffDoc.role : "cliente";
@@ -123,7 +123,7 @@ data.onAuth((user) => {
     S.loading = false;
     render();
   };
-  if (!owner) {
+  if (!owner && user.email) {
     authUnsubs.push(data.watchDoc("banned", user.email, (d) => { banned = d; gotB = true; resolve(); }));
     authUnsubs.push(data.watchDoc("staff", user.email, (d) => { staffDoc = d; gotS = true; resolve(); }));
   } else resolve();
@@ -238,7 +238,7 @@ function topbar() {
     <div class="brand">TurnoYa<small>${esc(CONFIG.restaurantName)}</small></div><div class="sp"></div>
     ${label ? `<span class="badge">${label}</span>` : ""}
     ${canNotif ? `<button class="icon-btn" data-act="notif" title="Activar avisos del sistema">🔔</button>` : ""}
-    <div class="avatar" title="${esc(u.email)}">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc((u.name || "?")[0].toUpperCase())}</div>
+    <div class="avatar" title="${esc(u.email || u.name)}">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc((u.name || "?")[0].toUpperCase())}</div>
     <button class="btn ghost sm" data-act="logout">Salir</button>
   </header>`;
 }
@@ -281,7 +281,12 @@ function loginView() {
     <span class="pill">Reto: reducir los tiempos de espera en restaurantes</span>
     <h1>Pide. Te toman en menos de 3 minutos.</h1>
     <p>Pedidos en tiempo real, aviso sonoro cuando tu pedido es confirmado y listo, y un panel que mide qué tan rápido atiende cada persona del equipo.</p>
-    ${isCloud ? `<button class="btn big gbtn" data-act="login" style="margin-bottom:20px"><i>G</i> Continuar con Google</button>` : ""}
+    
+    ${isCloud ? `
+      <button class="btn big gbtn" data-act="login" style="margin-bottom:12px; width:100%; max-width:420px;"><i>G</i> Continuar con Google</button>
+      <button class="btn big ghost" data-act="loginGuest" style="margin-bottom:20px; width:100%; max-width:420px;"><i>👤</i> Entrar como invitado (Cliente)</button>
+    ` : ""}
+    
     ${loginForm}
   </section>`;
 }
@@ -488,7 +493,7 @@ function adminClientes() {
     c.n++; c.total += o.total || 0;
   });
   const bannedSet = new Set(S.banned.map((b) => b.id));
-  const list = Object.values(map).filter((c) => !bannedSet.has(c.email)).sort((a, b) => b.n - a.n);
+  const list = Object.values(map).filter((c) => c.email && !bannedSet.has(c.email)).sort((a, b) => b.n - a.n);
   return `<h2>Clientes</h2>
   <form class="card form" style="margin:12px 0" data-form="banEmail"><input id="bnEmail" name="email" type="email" required placeholder="Bloquear por correo"><span></span><button class="btn bad">Banear</button></form>
   <div class="card">${list.map((c) => `<div class="item"><div><b>${esc(c.name)}</b><div class="muted">${esc(c.email)} · ${c.n} pedido(s) · ${money(c.total)}</div></div><button class="btn sm bad" data-act="ban" data-email="${esc(c.email)}">Banear</button></div>`).join("") || `<span class="muted">Aún no hay clientes</span>`}</div>
@@ -500,6 +505,14 @@ const fail = (e) => { console.error(e); toast(e?.code === "permission-denied" ? 
 
 const A = {
   async login() { try { await data.login(); } catch (e) { if (e?.code !== "auth/popup-closed-by-user") toast("No se pudo iniciar sesión: " + (e.code || e.message), "bad"); } },
+  async loginGuest() {
+    try {
+      await data.loginGuest();
+      toast("Entraste como invitado", "ok");
+    } catch (e) {
+      toast("Error al entrar como invitado: " + e.message, "bad");
+    }
+  },
   logout: () => data.logout(),
   notif: () => Notification.requestPermission().then(render),
   tab(d) { S.tab = d.t; render(); scrollTo(0, 0); },
@@ -580,7 +593,9 @@ const F = {
     const mesa = String(v.get("mesa")).trim();
     try {
       await data.set("orders", data.newId(), {
-        customerUid: S.user.uid, customerEmail: S.user.email, customerName: S.user.name,
+        customerUid: S.user.uid, 
+        customerEmail: S.user.email || "Invitado", // Si no hay correo (invitado), se guarda como "Invitado"
+        customerName: S.user.name || "Invitado",
         items: lines, total: lines.reduce((s, l) => s + l.price * l.qty, 0),
         mesa, note: String(v.get("note") || "").trim(), status: "espera", createdAt: data.stamp(),
       });
