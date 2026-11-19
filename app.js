@@ -235,7 +235,7 @@ function topbar() {
   const label = S.isOwner ? "Dueño" : ROLE_LABEL[S.role] || "";
   const canNotif = "Notification" in window && Notification.permission === "default";
   return `<header class="top">
-    <div class="brand">TurnoYa<small>${esc(CONFIG.restaurantName)}</small></div><div class="sp"></div>
+    <div class="brand">yaTA!<small>${esc(CONFIG.restaurantName)}</small></div><div class="sp"></div>
     ${label ? `<span class="badge">${label}</span>` : ""}
     ${canNotif ? `<button class="icon-btn" data-act="notif" title="Activar avisos del sistema">🔔</button>` : ""}
     <div class="avatar" title="${esc(u.email || u.name)}">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc((u.name || "?")[0].toUpperCase())}</div>
@@ -276,11 +276,12 @@ function loginView() {
     </div>
   `;
   
-  return `<header class="top"><div class="brand">TurnoYa<small>${esc(CONFIG.restaurantName)}</small></div></header>
+  // 👇 Aquí están los textos actualizados
+  return `<header class="top"><div class="brand">yaTA!<small>${esc(CONFIG.restaurantName)}</small></div></header>
   <section class="hero">
-    <span class="pill">Reto: reducir los tiempos de espera en restaurantes</span>
-    <h1>Pide. Te toman en menos de 3 minutos.</h1>
-    <p>Pedidos en tiempo real, aviso sonoro cuando tu pedido es confirmado y listo, y un panel que mide qué tan rápido atiende cada persona del equipo.</p>
+    <span class="pill">Redefiniendo la experiencia gastronómica</span>
+    <h1>El placer de un servicio impecable. Sin esperas.</h1>
+    <p>Pedidos en tiempo real, seguimiento de tu orden y avisos en cada etapa. Todo diseñado para que disfrutes de tu mesa sin pausas.</p>
     
     ${isCloud ? `
       <button class="btn big gbtn" data-act="login" style="margin-bottom:12px; width:100%; max-width:420px;"><i>G</i> Continuar con Google</button>
