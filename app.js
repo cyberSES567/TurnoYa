@@ -131,7 +131,7 @@ data.onAuth((user) => {
   authUnsubs.push(data.watchDoc("users", user.uid, (u, meta) => {
     if (u && typeof u.seen === "number" && !(meta && meta.pending)) S.offset = u.seen - Date.now();
   }));
-  data.set("users", user.uid, { email: user.email, name: user.name, seen: data.stamp() }).catch(() => {});
+  data.set("users", user.uid, { email: user.email || "", name: user.name, seen: data.stamp() }).catch(() => {});
   render();
 });
 
