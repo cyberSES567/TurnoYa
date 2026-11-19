@@ -608,7 +608,7 @@ const F = {
         imageUrl = await data.uploadImage(file);
       } catch (e) {
         if (btn) { btn.disabled = false; btn.textContent = "Agregar al menú"; }
-        return toast("Error al subir la imagen. Verifica tu conexión o el tamaño del archivo.", "bad");
+        return toast(e?.message || "Error al subir la imagen.", "bad");
       }
     }
 
