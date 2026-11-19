@@ -276,7 +276,6 @@ function loginView() {
     </div>
   `;
   
-  // 👇 Aquí están los textos actualizados
   return `<header class="top"><div class="brand">yaTA!<small>${esc(CONFIG.restaurantName)}</small></div></header>
   <section class="hero">
     <span class="pill">Redefiniendo la experiencia gastronómica</span>
@@ -317,7 +316,12 @@ function dishCard(m) {
     : q
     ? `<div class="qty"><button data-act="sub" data-id="${esc(m.id)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(m.id)}">+</button></div>`
     : `<button class="btn sm" data-act="add" data-id="${esc(m.id)}">Agregar</button>`;
-  return `<div class="dish ${off ? "off" : ""}"><div class="emo">${esc(m.emoji || "🍽️")}</div><div class="dn">${esc(m.name)}</div><div class="dp">${money(m.price)}</div>${ctl}</div>`;
+
+  const visual = m.imageUrl 
+    ? `<img src="${esc(m.imageUrl)}" alt="${esc(m.name)}" class="dish-img">`
+    : `<div class="emo">${esc(m.emoji || "🍽️")}</div>`;
+
+  return `<div class="dish ${off ? "off" : ""}">${visual}<div class="dn">${esc(m.name)}</div><div class="dp">${money(m.price)}</div>${ctl}</div>`;
 }
 function cartBar() {
   if (S.tab !== "menu") return "";
@@ -475,10 +479,16 @@ function adminMenu() {
   const items = [...S.menu].sort((a, b) => (a.category || "").localeCompare(b.category || ""));
   return `<h2>Menú</h2>
   <form class="card" style="margin:12px 0;display:grid;gap:8px" data-form="addMenu">
-    <div class="row"><input id="mnEmoji" name="emoji" placeholder="🍕" maxlength="4" style="max-width:80px"><input id="mnName" name="name" required placeholder="Nombre del plato" maxlength="40"></div>
+    <div class="row"><input id="mnName" name="name" required placeholder="Nombre del plato" maxlength="40"></div>
     <div class="row"><input id="mnPrice" name="price" type="number" step="0.1" min="0" required placeholder="Precio"><input id="mnCat" name="category" placeholder="Categoría (Platos…)" maxlength="20"></div>
+    <label class="lbl" style="margin:0">Foto del plato (Opcional)
+      <input name="image" type="file" accept="image/*" style="padding:10px; background:var(--card); border:1px solid var(--line); border-radius:12px; width:100%; color:var(--text);">
+    </label>
     <button class="btn">Agregar al menú</button></form>
-  <div class="card">${items.map((m) => `<div class="item"><div><b>${esc(m.emoji || "🍽️")} ${esc(m.name)}</b><div class="muted">${esc(m.category || "")} · ${money(m.price)} · ${m.available === false ? "Agotado" : "Disponible"}</div></div>
+  <div class="card">${items.map((m) => `<div class="item"><div style="display:flex; align-items:center; gap:12px">
+      ${m.imageUrl ? `<img src="${esc(m.imageUrl)}" style="width:48px; height:48px; object-fit:cover; border-radius:8px;">` : `<span style="font-size:1.5rem">${esc(m.emoji || "🍽️")}</span>`}
+      <div><b>${esc(m.name)}</b><div class="muted">${esc(m.category || "")} · ${money(m.price)} · ${m.available === false ? "Agotado" : "Disponible"}</div></div>
+    </div>
     <div class="acts"><button class="btn sm ghost" data-act="toggleMenu" data-id="${esc(m.id)}">${m.available === false ? "Marcar disponible" : "Marcar agotado"}</button><button class="btn sm bad" data-act="delMenu" data-id="${esc(m.id)}">Eliminar</button></div></div>`).join("") || `<span class="muted">Sin platos</span>`}</div>`;
 }
 function adminResenas() {
@@ -494,7 +504,7 @@ function adminClientes() {
     c.n++; c.total += o.total || 0;
   });
   const bannedSet = new Set(S.banned.map((b) => b.id));
-  const list = Object.values(map).filter((c) => c.email && !bannedSet.has(c.email)).sort((a, b) => b.n - a.n);
+  const list = Object.values(map).filter((c) => c.email && c.email !== "Invitado" && !bannedSet.has(c.email)).sort((a, b) => b.n - a.n);
   return `<h2>Clientes</h2>
   <form class="card form" style="margin:12px 0" data-form="banEmail"><input id="bnEmail" name="email" type="email" required placeholder="Bloquear por correo"><span></span><button class="btn bad">Banear</button></form>
   <div class="card">${list.map((c) => `<div class="item"><div><b>${esc(c.name)}</b><div class="muted">${esc(c.email)} · ${c.n} pedido(s) · ${money(c.total)}</div></div><button class="btn sm bad" data-act="ban" data-email="${esc(c.email)}">Banear</button></div>`).join("") || `<span class="muted">Aún no hay clientes</span>`}</div>
@@ -586,6 +596,35 @@ const F = {
     }
   },
 
+  async addMenu(f) {
+    const v = new FormData(f);
+    const file = v.get("image");
+    const btn = f.querySelector("button");
+    let imageUrl = "";
+
+    if (file && file.size > 0) {
+      if (btn) { btn.disabled = true; btn.textContent = "Subiendo foto..."; }
+      try {
+        imageUrl = await data.uploadImage(file);
+      } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = "Agregar al menú"; }
+        return toast("Error al subir la imagen. Verifica tu conexión o el tamaño del archivo.", "bad");
+      }
+    }
+
+    data.set("menu", data.newId(), {
+      name: String(v.get("name")).trim(), 
+      price: Number(v.get("price")),
+      imageUrl: imageUrl,
+      category: String(v.get("category") || "Platos").trim(), 
+      available: true,
+    }).then(() => { 
+      f.reset(); 
+      render(); 
+      toast("Plato agregado", "ok");
+    }).catch(fail);
+  },
+
   async placeOrder(f) {
     const v = new FormData(f);
     const lines = cartLines();
@@ -595,7 +634,7 @@ const F = {
     try {
       await data.set("orders", data.newId(), {
         customerUid: S.user.uid, 
-        customerEmail: S.user.email || "Invitado", // Si no hay correo (invitado), se guarda como "Invitado"
+        customerEmail: S.user.email || "Invitado", 
         customerName: S.user.name || "Invitado",
         items: lines, total: lines.reduce((s, l) => s + l.price * l.qty, 0),
         mesa, note: String(v.get("note") || "").trim(), status: "espera", createdAt: data.stamp(),
@@ -619,14 +658,6 @@ const F = {
     if (email === OWNER) return toast("El dueño ya tiene acceso total", "bad");
     data.set("staff", email, { email, role: v.get("role"), active: true, addedBy: S.user.email, createdAt: data.stamp() })
       .then(() => { f.reset(); render(); toast(`${email} agregado al equipo`, "ok"); }).catch(fail);
-  },
-
-  addMenu(f) {
-    const v = new FormData(f);
-    data.set("menu", data.newId(), {
-      name: String(v.get("name")).trim(), price: Number(v.get("price")),
-      emoji: String(v.get("emoji") || "🍽️").trim(), category: String(v.get("category") || "Platos").trim(), available: true,
-    }).then(() => { f.reset(); render(); }).catch(fail);
   },
 
   banEmail(f) {
