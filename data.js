@@ -19,7 +19,7 @@ if (isCloud) {
     u && {
       uid: u.uid,
       email: (u.email || "").toLowerCase(),
-      name: u.displayName || u.email,
+      name: u.displayName || u.email || "Invitado",
       photo: u.photoURL || "",
     };
   const conv = (v) => (v && typeof v.toMillis === "function" ? v.toMillis() : v);
@@ -34,9 +34,9 @@ if (isCloud) {
   impl = {
     onAuth: (cb) => authM.onAuthStateChanged(auth, (u) => cb(toUser(u))),
     login: () => authM.signInWithPopup(auth, new authM.GoogleAuthProvider()),
+    loginGuest: () => authM.signInAnonymously(auth), // <-- NUEVO: Login Invitado
     logout: () => authM.signOut(auth),
 
-    // ── NUEVO: Autenticación con Email/Password ──
     register: async (email, password, name) => {
       const cred = await authM.createUserWithEmailAndPassword(auth, email, password);
       if (name) await authM.updateProfile(cred.user, { displayName: name });
@@ -105,6 +105,12 @@ if (isCloud) {
       current = { uid: "u_" + email.replace(/[^a-z0-9]/g, "_"), email, name: p.name || email, photo: "" };
       sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
       emit();
+    },
+    loginGuest: async () => {
+      current = { uid: "u_guest_" + Date.now(), email: "", name: "Invitado", photo: "" };
+      sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
+      emit();
+      return current;
     },
     logout() {
       current = null;
