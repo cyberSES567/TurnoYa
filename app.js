@@ -26,6 +26,7 @@ const SLA = CONFIG.acceptSlaSeconds * 1000;
 const OWNER = CONFIG.ownerEmail.toLowerCase();
 const wUid = (o) => o.waiterUid || o.receptorUid;
 const wName = (o) => o.waiterName || o.receptorName || "";
+const incl = (i) => (i.includes && i.includes.length ? `<div class="muted" style="font-size:.8rem">Incluye: ${i.includes.map((x) => `${x.qty}× ${esc(x.name)}`).join(", ")}</div>` : "");
 
 const STAFF_ROLES = ["admin", "moderador", "mesero", "cocinero"];
 const normRole = (r) => (r === "receptor" ? "mesero" : STAFF_ROLES.includes(r) ? r : "cliente");
@@ -129,8 +130,14 @@ const deliveredCount = (arr) => arr.filter((o) => o.status === "entregado").leng
 const suggestedPct = (n) => Math.min(CONFIG.loyaltyMax, Math.floor(n / CONFIG.loyaltyEvery) * CONFIG.loyaltyStep);
 
 /* ====================== precios y ofertas ====================== */
-const activeOffers = () => S.offers.filter((o) => o.active !== false);
-const offerFor = (id) => activeOffers().find((o) => o.menuId === id);
+const activeOffers = () => S.offers.filter((o) => o.active !== false && (!o.endsAt || o.endsAt >= now()));
+const offerFor = (id) => activeOffers().find((o) => o.type !== "combo" && o.menuId === id);
+const comboItems = (o) => (o.items || []).map((it) => ({ ...it, m: S.menu.find((x) => x.id === it.id) })).filter((it) => it.m);
+const comboNormal = (o) => r2(comboItems(o).reduce((s, it) => s + it.m.price * it.qty, 0));
+const comboSave = (o) => Math.max(0, r2(comboNormal(o) - Number(o.offerPrice || 0)));
+const comboOk = (o) => { const its = comboItems(o); return its.length > 0 && its.length === (o.items || []).length && its.every((it) => it.m.available !== false); };
+const offerEnds = (o) => (o.endsAt ? "Hasta el " + dmy(o.endsAt) : "");
+const offerUnit = (o, m) => (o.type === "pct" ? r2(m.price * (1 - (o.discountPct || 0) / 100)) : o.type === "2x1" ? m.price : Number(o.offerPrice ?? m.price));
 const priceOf = (m) => {
   const o = offerFor(m.id);
   if (!o) return m.price;
@@ -308,7 +315,7 @@ function checkLate() {
 function render() {
   const act = document.activeElement;
   const keep = {}, files = {};
-  $app.querySelectorAll("input[id],textarea[id],select[id]").forEach((el) => (keep[el.id] = el.value));
+  $app.querySelectorAll("input[id],textarea[id],select[id]").forEach((el) => (keep[el.id] = el.type === "checkbox" ? el.checked : el.value));
   $app.querySelectorAll("input[type=file][name]").forEach((el) => { if (el.files && el.files.length) files[el.name] = el.files[0]; });
   const fid = act && $app.contains(act) ? act.id : null;
   const ss = act?.selectionStart, se = act?.selectionEnd;
@@ -318,13 +325,14 @@ function render() {
 
   $app.innerHTML = view();
 
-  for (const [id, v] of Object.entries(keep)) { const el = document.getElementById(id); if (el) el.value = v; }
+  for (const [id, v] of Object.entries(keep)) { const el = document.getElementById(id); if (el) { if (el.type === "checkbox") el.checked = v; else el.value = v; } }
   $app.querySelectorAll("input[type=file][name]").forEach((el) => {
     if (files[el.name]) { try { const dt = new DataTransfer(); dt.items.add(files[el.name]); el.files = dt.files; } catch {} }
   });
   if (fid) { const el = document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(ss, se); } catch {} } }
   const m2 = document.getElementById("msgs");
   if (m2) m2.scrollTop = stick ? m2.scrollHeight : st;
+  updateComboHint();
   tick();
 }
 
@@ -447,6 +455,12 @@ const teamView = () => `<h2 style="margin-bottom:12px">Chat del equipo</h2>${cha
 /* ====================== CLIENTE ====================== */
 const cartLines = () =>
   Object.entries(S.cart).map(([id, qty]) => {
+    if (id.startsWith("combo:")) {
+      const o = activeOffers().find((x) => x.type === "combo" && x.id === id.slice(6));
+      if (!o || !comboOk(o)) return null;
+      const price = Number(o.offerPrice);
+      return { id, name: o.title, price, qty, lineTotal: r2(price * qty), combo: true, includes: comboItems(o).map((it) => ({ id: it.id, name: it.m.name, qty: it.qty })) };
+    }
     const m = S.menu.find((x) => x.id === id);
     if (!m) return null;
     const o = offerFor(id);
@@ -455,7 +469,7 @@ const cartLines = () =>
       const free = Math.floor(qty / 2);
       lineTotal = (qty - free) * m.price; // Lleva 2, paga 1
     }
-    return { id, name: m.name, price: priceOf(m), qty, lineTotal };
+    return { id, name: m.name, price: priceOf(m), qty, lineTotal: r2(lineTotal) };
   }).filter(Boolean);
 function clienteView() {
   return ({ menu: menuView, ofertas: ofertasView, resenas: resenasView, pedidos: misPedidos, ayuda: ayudaView }[S.tab] || menuView)();
@@ -467,10 +481,14 @@ function menuView() {
   const banner = active
     ? `<div class="banner" data-act="tab" data-t="pedidos"><div><b>Pedido #${short(active.id)} · ${ST[active.status]}</b><div class="muted">Toca para ver el seguimiento</div></div></div>`
     : "";
+  const promos = activeOffers().filter((o) => o.type === "combo" || o.featured).slice(0, 3);
+  const promo = promos.length
+    ? `<div class="card" data-act="tab" data-t="ofertas" style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;cursor:pointer;border:1px solid var(--accent2)"><b>🔥 Ofertas de hoy</b>${promos.map((o) => `<span class="chip ok">${esc(o.title)}${o.type === "combo" ? " · " + money(o.offerPrice) : ""}</span>`).join("")}<span class="muted">Ver todas →</span></div>`
+    : "";
   const d = discPct();
   const chips = `${S.mesa ? `<span class="chip ok">Mesa ${esc(S.mesa)}</span> ` : ""}${d ? `<span class="chip estimado">Tu descuento −${d}%</span>` : ""}`;
   const dishes = cats.map((c) => `<h2 class="sec">${esc(c)}</h2><div class="grid">${S.menu.filter((m) => (m.category || "Otros") === c).map((m) => dishCard(m, rm)).join("")}</div>`).join("");
-  return `${banner}<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2>¿Qué se te antoja?</h2><div>${chips}</div></div>${dishes || `<div class="empty" style="margin-top:16px">El menú aún no tiene platos.</div>`}<div style="height:70px"></div>`;
+  return `${banner}${promo}<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2>¿Qué se te antoja?</h2><div>${chips}</div></div>${dishes || `<div class="empty" style="margin-top:16px">El menú aún no tiene platos.</div>`}<div style="height:70px"></div>`;
 }
 function dishCard(m, rm) {
   const q = S.cart[m.id] || 0;
@@ -493,27 +511,42 @@ function dishCard(m, rm) {
   const r = rm[m.id];
   return `<div class="dish ${off ? "off" : ""}">${visual}<div class="dn">${esc(m.name)}</div><div class="dp">${price}</div>${r ? `<div class="rt"><span class="stars">★</span> ${(r.s / r.n).toFixed(1)} (${r.n})</div>` : ""}${ctl}</div>`;
 }
-function ofertasView() {
-  const list = activeOffers();
-  if (!list.length) return `<h2>Ofertas</h2><div class="empty" style="margin-top:12px">Por ahora no hay ofertas activas. ¡Vuelve pronto!</div>`;
-  return `<h2 style="margin-bottom:12px">Ofertas</h2><div class="offers">${list.map((o) => {
+function addCtl(key, ok) {
+  const q = S.cart[key] || 0;
+  if (!ok) return `<span class="chip bad">Agotado</span>`;
+  if (!isOpen()) return `<span class="chip">Cerrado</span>`;
+  return q
+    ? `<div class="qty"><button data-act="sub" data-id="${esc(key)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(key)}">+</button></div>`
+    : `<button class="btn sm" data-act="add" data-id="${esc(key)}">Agregar</button>`;
+}
+function offerCard(o) {
+  const acc = "color:var(--accent2)";
+  let body = "";
+  if (o.type === "combo") {
+    const its = comboItems(o), normal = comboNormal(o), save = comboSave(o);
+    body = `<ul class="items">${its.map((it) => `<li><b>${it.qty}×</b> ${esc(it.m.emoji || "")} ${esc(it.m.name)}</li>`).join("")}</ul>
+      <div class="line"><span>${save > 0 ? `<s>${money(normal)}</s> ` : ""}<b style="font-size:1.25rem;${acc}">${money(o.offerPrice)}</b>${save > 0 ? ` <span class="chip ok">Ahorras ${money(save)}</span>` : ""}</span>${addCtl("combo:" + o.id, comboOk(o))}</div>`;
+  } else {
     const m = o.menuId ? S.menu.find((x) => x.id === o.menuId) : null;
-    const q = m ? S.cart[m.id] || 0 : 0;
-    let ctl = "";
     if (m) {
-      const add = m.available === false ? `<span class="chip bad">Agotado</span>` : !isOpen() ? `<span class="chip">Cerrado</span>` : q
-        ? `<div class="qty"><button data-act="sub" data-id="${esc(m.id)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(m.id)}">+</button></div>`
-        : `<button class="btn sm" data-act="add" data-id="${esc(m.id)}">Agregar</button>`;
-      let priceTxt;
-      if (o.type === "2x1") priceTxt = `<b style="color:var(--accent2)">2x1</b> · ${money(m.price)} · ${esc(m.name)}`;
-      else if (o.type === "pct") priceTxt = `<s>${money(m.price)}</s> <b style="color:var(--accent2)">${money(priceOf(m))}</b> · ${esc(m.name)}`;
-      else if (o.offerPrice != null && o.offerPrice !== "") priceTxt = `<s>${money(m.price)}</s> <b style="color:var(--accent2)">${money(o.offerPrice)}</b> · ${esc(m.name)}`;
-      else priceTxt = `${esc(m.name)}`;
-      ctl = `<div class="line"><span>${priceTxt}</span>${add}</div>`;
+      let price;
+      if (o.type === "2x1") price = `<b style="font-size:1.1rem;${acc}">2x1</b> · ${money(m.price)} c/u · ${esc(m.name)}`;
+      else {
+        const p = offerUnit(o, m);
+        price = `<s>${money(m.price)}</s> <b style="font-size:1.25rem;${acc}">${money(p)}</b> <span class="chip ok">Ahorras ${money(Math.max(0, m.price - p))}</span> · ${esc(m.name)}`;
+      }
+      body = `<div class="line"><span>${price}</span>${addCtl(m.id, m.available !== false)}</div>`;
     }
-    return `<article class="card offer">${o.imageUrl ? `<img src="${esc(o.imageUrl)}" alt="${esc(o.title)}">` : ""}<div class="ob">
-      ${o.badge ? `<span class="tag">${esc(o.badge)}</span>` : ""}<h3>${esc(o.title)}</h3>${o.description ? `<p class="muted">${esc(o.description)}</p>` : ""}${ctl}</div></article>`;
-  }).join("")}</div><div style="height:70px"></div>`;
+  }
+  const ends = o.endsAt ? `<p class="muted" style="font-size:.8rem">⏳ ${offerEnds(o)}</p>` : "";
+  const tag = o.badge || o.featured ? `<span class="tag">${o.featured ? "🔥 " : ""}${esc(o.badge || "Destacada")}</span>` : "";
+  return `<article class="card offer"${o.featured ? ' style="border:1px solid var(--accent2)"' : ""}>${o.imageUrl ? `<img src="${esc(o.imageUrl)}" alt="${esc(o.title)}">` : ""}<div class="ob">
+    ${tag}<h3>${esc(o.title)}</h3>${o.description ? `<p class="muted">${esc(o.description)}</p>` : ""}${body}${ends}</div></article>`;
+}
+function ofertasView() {
+  const list = [...activeOffers()].sort((a, b) => (b.featured ? 1 : 0) - (a.featured ? 1 : 0) || (b.createdAt || 0) - (a.createdAt || 0));
+  if (!list.length) return `<h2>Ofertas</h2><div class="empty" style="margin-top:12px">Por ahora no hay ofertas activas. ¡Vuelve pronto!</div>`;
+  return `<h2 style="margin-bottom:12px">Ofertas</h2><div class="offers">${list.map(offerCard).join("")}</div><div style="height:70px"></div>`;
 }
 const reviewCard = (r, del) => `<article class="review"><div class="rvh"><span class="stars">${stars(r.rating)}</span><span class="muted">${esc(first(r.customerName) || "Cliente")}${r.at ? " · " + dmy(r.at) : ""}</span></div>
   ${r.comment ? `<p>${esc(r.comment)}</p>` : ""}${r.photoUrl ? `<img class="rvimg" src="${esc(r.photoUrl)}" alt="Foto del pedido" loading="lazy">` : ""}
@@ -567,7 +600,7 @@ function myOrderCard(o) {
     <p class="muted">Tiempo transcurrido · <span class="timer" data-since="${o.createdAt}"><b>0:00</b></span></p>` : ""}
     ${o.etaMin && ["estimado", "preparando"].includes(o.status) ? `<p class="muted">Tiempo estimado de cocina: ~${o.etaMin} min</p>` : ""}
     ${wName(o) && active ? `<p class="muted">Te atiende ${esc(first(wName(o)))}</p>` : ""}
-    <ul class="items">${o.items.map((i) => `<li>${i.qty}× ${esc(i.name)}</li>`).join("")}</ul>
+    <ul class="items">${o.items.map((i) => `<li>${i.qty}× ${esc(i.name)}${incl(i)}</li>`).join("")}</ul>
     ${o.discount ? `<div class="line dsc"><span>Descuento −${o.discount}%</span><span>−${money(r2((o.subtotal || o.total) - o.total))}</span></div>` : ""}
     <div class="line tot"><span>Mesa ${esc(o.mesa)}</span><b>${money(o.total)}</b></div>
     ${o.review ? `<p class="stars">${stars(o.review.rating)} <span class="muted">${esc(o.review.comment || "")}</span></p>` : ""}
@@ -585,7 +618,7 @@ function openCart() {
   const d = discPct(), total = r2(sub * (1 - d / 100));
   $modal.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" data-form="placeOrder">
     <h2>Tu pedido</h2>
-    ${lines.map((l) => `<div class="line"><span>${l.qty}× ${esc(l.name)} ${offerFor(l.id)?.type === '2x1' ? '<span class="chip ok" style="font-size:0.6rem">2x1</span>' : ''}</span><b>${money(l.lineTotal)}</b></div>`).join("")}
+    ${lines.map((l) => `<div class="line"><span>${l.qty}× ${esc(l.name)} ${l.combo ? '<span class="chip ok" style="font-size:0.6rem">Combo</span>' : offerFor(l.id)?.type === '2x1' ? '<span class="chip ok" style="font-size:0.6rem">2x1</span>' : ''}${incl(l)}</span><b>${money(l.lineTotal)}</b></div>`).join("")}
     ${d ? `<div class="line"><span>Subtotal</span><span>${money(sub)}</span></div><div class="line dsc"><span>Descuento de cliente frecuente −${d}%</span><span>−${money(r2(sub - total))}</span></div>` : ""}
     <div class="line tot"><span>Total</span><b>${money(total)}</b></div>
     <label class="lbl">Número de mesa<input name="mesa" required maxlength="6" inputmode="numeric" value="${esc(S.mesa)}" placeholder="Ej. 5"></label>
@@ -656,7 +689,7 @@ function waiterCard(o) {
       ${since ? `<span class="timer" data-since="${since}" ${timerMode}><b>0:00</b></span>` : ""}</div>
     ${o.status !== "espera" ? `<div><span class="chip ${o.status}">${ST[o.status].replace("tu pedido", "el pedido").replace("Tu pedido", "Pedido")}</span></div>` : ""}
     <div class="muted" style="margin-top:6px">${esc(first(o.customerName))}</div>
-    <ul class="items">${o.items.map((i) => `<li><b>${i.qty}×</b> ${esc(i.name)}</li>`).join("")}</ul>
+    <ul class="items">${o.items.map((i) => `<li><b>${i.qty}×</b> ${esc(i.name)}${incl(i)}</li>`).join("")}</ul>
     ${o.note ? `<div class="note">Nota: ${esc(o.note)}</div>` : ""}
     <div class="acts">${act}</div>
   </article>`;
@@ -697,7 +730,7 @@ function cookCard(o, i) {
   return `<article class="card order">
     <div class="oh"><b>Mesa ${esc(o.mesa)} <span class="muted">· #${short(o.id)}</span></b>${timer}</div>
     <div>${head}</div>
-    <ul class="items">${o.items.map((it) => `<li><b>${it.qty}×</b> ${esc(it.name)}</li>`).join("")}</ul>
+    <ul class="items">${o.items.map((it) => `<li><b>${it.qty}×</b> ${esc(it.name)}${incl(it)}</li>`).join("")}</ul>
     ${o.note ? `<div class="note">Nota: ${esc(o.note)}</div>` : ""}
     <div class="acts">${act}</div>
   </article>`;
@@ -752,34 +785,59 @@ function clientesView() {
 }
 function ofertasAdmin() {
   const items = [...S.offers].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const t = S.ofType || "combo";
+  const menu = [...S.menu].sort((a, b) => a.name.localeCompare(b.name));
+  const types = [["combo", "Combo (varios platos por un solo precio)"], ["fixed", "Un plato con precio especial"], ["2x1", "2x1 en un plato (lleva 2, paga 1)"], ["pct", "Descuento % en un plato"]];
+  const dishSel = `<select id="ofMenu" name="menuId" required><option value="">Elige un plato...</option>${menu.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${money(m.price)})</option>`).join("")}</select>`;
+  const fields = t === "combo"
+    ? `<div class="card" style="padding:12px;display:grid;gap:8px"><b>Arma tu combo</b><span class="muted">Pon cuántas unidades de cada plato incluye (0 = no incluido).</span>
+        ${menu.map((m) => `<div class="line"><span>${esc(m.emoji || "")} ${esc(m.name)} <span class="muted">· ${money(m.price)}</span></span><input class="cbq" id="cb_${esc(m.id)}" name="cq_${esc(m.id)}" data-mid="${esc(m.id)}" type="number" min="0" max="9" step="1" value="0" style="width:72px"></div>`).join("") || `<span class="muted">Primero agrega platos al menú.</span>`}
+        <input id="ofPrice" name="offerPrice" type="number" step="0.1" min="0.1" required placeholder="Precio del combo (S/)">
+        <span class="muted" id="comboHint">Elige las cantidades de cada plato del combo.</span></div>`
+    : `${dishSel}${t === "fixed" ? `<input id="ofPrice" name="offerPrice" type="number" step="0.1" min="0" required placeholder="Precio especial (S/)">`
+      : t === "pct" ? `<input id="ofPct" name="discountPct" type="number" step="1" min="1" max="99" required placeholder="% de descuento">`
+      : `<p class="muted">El cliente lleva 2 unidades y paga 1 (se aplica en el carrito).</p>`}`;
   return `<h2>Ofertas</h2>
   <form class="card" style="margin:12px 0;display:grid;gap:8px" data-form="addOffer">
-    <input id="ofTitle" name="title" required maxlength="50" placeholder="Título (ej. 2x1 en Chichas)">
-    <textarea id="ofDesc" name="description" rows="2" maxlength="160" placeholder="Descripción"></textarea>
-
-    <select id="ofType" name="type" required>
-      <option value="fixed">Precio Fijo (Descuento en S/)</option>
-      <option value="2x1">2x1 (Lleva 2, paga 1)</option>
-      <option value="pct">Descuento Porcentual (%)</option>
-    </select>
-
+    <input id="ofTitle" name="title" required maxlength="50" placeholder="Título (ej. Combo Familiar: Chicha + Chuleta + Torta)">
+    <textarea id="ofDesc" name="description" rows="2" maxlength="160" placeholder="Descripción (ej. Ideal para compartir en familia)"></textarea>
+    <select id="ofType" name="type" data-change="ofType">${types.map(([v, l]) => `<option value="${v}" ${t === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+    ${fields}
     <div class="row">
-      <input id="ofBadge" name="badge" maxlength="14" placeholder="Etiqueta (ej. Oferta)">
-      <select id="ofMenu" name="menuId" required><option value="">Elige un plato...</option>${[...S.menu].sort((a, b) => a.name.localeCompare(b.name)).map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${money(m.price)})</option>`).join("")}</select>
+      <input id="ofBadge" name="badge" maxlength="20" placeholder="Etiqueta (ej. ¡Súper ahorro!)">
+      <label class="lbl" style="margin:0">Válida hasta (opcional)<input id="ofEnds" name="endsAt" type="date"></label>
     </div>
-
-    <div class="row">
-      <input id="ofPrice" name="offerPrice" type="number" step="0.1" min="0" placeholder="Nuevo Precio (Solo si es Precio Fijo)">
-      <input id="ofPct" name="discountPct" type="number" step="1" min="1" max="99" placeholder="% de Descuento (Solo si es %)">
-    </div>
-
+    <label style="display:flex;gap:8px;align-items:center"><input id="ofFeat" name="featured" type="checkbox" style="width:auto"> 🔥 Destacar (sale primero y en la portada del menú)</label>
     <label class="lbl" style="margin:0">Imagen (opcional)<input name="image" type="file" accept="image/*"></label>
     <button class="btn">Publicar oferta</button></form>
-  <div class="card">${items.map((o) => { const m = S.menu.find((x) => x.id === o.menuId); return `<div class="item"><div style="display:flex;align-items:center;gap:12px">
+  <div class="card">${items.map((o) => {
+    const m = S.menu.find((x) => x.id === o.menuId);
+    const expired = o.endsAt && o.endsAt < now();
+    let what;
+    if (o.type === "combo") what = `Combo: ${comboItems(o).map((it) => `${it.qty}× ${esc(it.m.name)}`).join(" + ") || "platos eliminados"} → ${money(o.offerPrice)}`;
+    else what = m ? `${esc(m.name)} (${o.type === "2x1" ? "2x1" : o.type === "pct" ? `-${o.discountPct}%` : money(o.offerPrice)})` : "Promoción";
+    const state = expired ? "Vencida" : o.active === false ? "Pausada" : "Activa";
+    return `<div class="item"><div style="display:flex;align-items:center;gap:12px">
     ${o.imageUrl ? `<img src="${esc(o.imageUrl)}" style="width:48px;height:48px;object-fit:cover;border-radius:8px" alt="">` : ""}
-    <div><b>${esc(o.title)}</b> ${o.badge ? `<span class="chip estimado">${esc(o.badge)}</span>` : ""}
-    <div class="muted">${m ? `${esc(m.name)} (${o.type === '2x1' ? '2x1' : o.type === 'pct' ? `-${o.discountPct}%` : money(o.offerPrice)})` : "Promoción"} · ${o.active === false ? "Pausada" : "Activa"}</div></div></div>
-    <div class="acts"><button class="btn sm ghost" data-act="toggleOffer" data-id="${esc(o.id)}">${o.active === false ? "Activar" : "Pausar"}</button><button class="btn sm bad" data-act="delOffer" data-id="${esc(o.id)}">Eliminar</button></div></div>`; }).join("") || `<span class="muted">Sin ofertas</span>`}</div>`;
+    <div><b>${o.featured ? "🔥 " : ""}${esc(o.title)}</b> ${o.badge ? `<span class="chip estimado">${esc(o.badge)}</span>` : ""}
+    <div class="muted">${what} · ${state}${o.endsAt ? " · " + offerEnds(o) : ""}</div></div></div>
+    <div class="acts"><button class="btn sm ghost" data-act="toggleFeatured" data-id="${esc(o.id)}">${o.featured ? "Quitar destacado" : "Destacar"}</button><button class="btn sm ghost" data-act="toggleOffer" data-id="${esc(o.id)}">${o.active === false ? "Activar" : "Pausar"}</button><button class="btn sm bad" data-act="delOffer" data-id="${esc(o.id)}">Eliminar</button></div></div>`;
+  }).join("") || `<span class="muted">Sin ofertas</span>`}</div>`;
+}
+function updateComboHint() {
+  const el = document.getElementById("comboHint");
+  if (!el) return;
+  let normal = 0, units = 0;
+  $app.querySelectorAll("input.cbq").forEach((i) => {
+    const q = Math.max(0, Math.floor(Number(i.value) || 0));
+    const m = S.menu.find((x) => x.id === i.dataset.mid);
+    if (m && q) { normal += m.price * q; units += q; }
+  });
+  const price = Number(document.getElementById("ofPrice")?.value || 0);
+  if (!units) { el.textContent = "Elige las cantidades de cada plato del combo."; return; }
+  let txt = "Valor normal: " + money(normal);
+  if (price > 0) txt += price < normal ? ` · Ahorro del cliente: ${money(normal - price)} (${Math.round((1 - price / normal) * 100)}%)` : " · El precio del combo debe ser menor al valor normal";
+  el.textContent = txt;
 }
 function resenasAdmin() {
   const rs = filteredReviews();
@@ -873,7 +931,7 @@ function adminHistorial() {
   }));
 
   const dishes = {};
-  done.forEach((o) => o.items.forEach((i) => { const x = (dishes[i.name] ??= { name: i.name, qty: 0, inc: 0 }); x.qty += i.qty; x.inc += i.qty * i.price; }));
+  done.forEach((o) => o.items.forEach((i) => { const x = (dishes[i.name] ??= { name: i.name, qty: 0, inc: 0 }); x.qty += i.qty; x.inc += i.lineTotal ?? i.qty * i.price; }));
   const top = Object.values(dishes).sort((a, b) => b.qty - a.qty).slice(0, 8);
 
   const gW = {};
@@ -1052,6 +1110,7 @@ const A = {
     data.set("menu", d.id, { price: Number(v) }).catch(fail);
   },
   toggleOffer(d) { const o = S.offers.find((x) => x.id === d.id); o && data.set("offers", d.id, { active: o.active === false }).catch(fail); },
+  toggleFeatured(d) { const o = S.offers.find((x) => x.id === d.id); o && data.set("offers", d.id, { featured: !o.featured }).catch(fail); },
   delOffer(d) { if (confirm("¿Eliminar esta oferta?")) data.remove("offers", d.id).catch(fail); },
   delReview(d) { if (confirm("¿Eliminar esta reseña?")) data.remove("reviews", d.id).catch(fail); },
   ban(d) {
@@ -1102,6 +1161,7 @@ const C = {
   role: (d, el) => data.set("staff", d.email, { role: el.value }).catch(fail),
   loyalty: (d, el) => setLoyalty(d.uid, d.email, d.name, Number(el.value)),
   rvFilter: (d, el) => { S.rvFilter = el.value; render(); },
+  ofType: (d, el) => { S.ofType = el.value; render(); },
   histRange: (d, el) => {
     if (!el.value) return;
     const h = { ...histRange(), [d.r]: el.value };
@@ -1192,14 +1252,30 @@ const F = {
     const file = v.get("image");
     const btn = f.querySelector("button");
     let imageUrl = "";
+    const type = String(v.get("type") || "combo");
     const menuId = String(v.get("menuId") || "");
-    const type = String(v.get("type") || "fixed");
     const priceRaw = String(v.get("offerPrice") || "");
     const pctRaw = String(v.get("discountPct") || "");
+    const endRaw = String(v.get("endsAt") || "");
+    const endsAt = endRaw ? dayEnd(endRaw) : null;
+    const title = String(v.get("title") || "").trim();
+    let items = [];
 
-    if (!menuId) return toast("Elige un plato para la oferta", "bad");
-    if (type === "fixed" && priceRaw === "") return toast("Indica el precio de oferta", "bad");
-    if (type === "pct" && pctRaw === "") return toast("Indica el % de descuento", "bad");
+    if (!title) return toast("Ponle un título a la oferta", "bad");
+    if (endsAt && endsAt < now()) return toast("La fecha de vigencia ya pasó", "bad");
+    if (type === "combo") {
+      const picked = S.menu.map((m) => ({ id: m.id, price: m.price, qty: Math.min(9, Math.floor(Number(v.get("cq_" + m.id)) || 0)) })).filter((x) => x.qty > 0);
+      const units = picked.reduce((s, x) => s + x.qty, 0);
+      const normal = picked.reduce((s, x) => s + x.price * x.qty, 0);
+      if (units < 2) return toast("Un combo necesita al menos 2 productos", "bad");
+      if (!(Number(priceRaw) > 0)) return toast("Indica el precio del combo", "bad");
+      if (Number(priceRaw) >= normal) return toast(`El precio del combo debe ser menor a ${money(normal)}`, "bad");
+      items = picked.map((x) => ({ id: x.id, qty: x.qty }));
+    } else {
+      if (!menuId) return toast("Elige un plato para la oferta", "bad");
+      if (type === "fixed" && priceRaw === "") return toast("Indica el precio de oferta", "bad");
+      if (type === "pct" && pctRaw === "") return toast("Indica el % de descuento", "bad");
+    }
 
     if (file && file.size > 0) {
       if (btn) { btn.disabled = true; btn.textContent = "Subiendo imagen..."; }
@@ -1210,9 +1286,10 @@ const F = {
       }
     }
     data.set("offers", data.newId(), {
-      title: String(v.get("title")).trim(), description: String(v.get("description") || "").trim(), badge: String(v.get("badge") || "").trim(),
-      menuId, type, offerPrice: type === "fixed" ? Number(priceRaw) : null, discountPct: type === "pct" ? Number(pctRaw) : null,
-      imageUrl, active: true, createdAt: data.stamp(), by: S.user.email || "",
+      title, description: String(v.get("description") || "").trim(), badge: String(v.get("badge") || "").trim(),
+      type, menuId: type === "combo" ? null : menuId, items,
+      offerPrice: type === "fixed" || type === "combo" ? Number(priceRaw) : null, discountPct: type === "pct" ? Number(pctRaw) : null,
+      featured: v.has("featured"), endsAt, imageUrl, active: true, createdAt: data.stamp(), by: S.user.email || "",
     }).then(() => { f.reset(); if (btn) { btn.disabled = false; btn.textContent = "Publicar oferta"; } render(); toast("Oferta publicada", "ok"); }).catch((e) => { if (btn) { btn.disabled = false; btn.textContent = "Publicar oferta"; } fail(e); });
   },
 
@@ -1252,7 +1329,7 @@ const F = {
     try {
       await data.set("reviews", o.id, {
         orderId: o.id, customerUid: S.user.uid, customerName: first(S.user.name) || "Cliente", rating: S.rv.n, comment, photoUrl,
-        items: o.items.map((i) => ({ id: i.id, name: i.name })), at: data.stamp(),
+        items: o.items.flatMap((i) => (i.includes ? i.includes.map((x) => ({ id: x.id, name: x.name })) : [{ id: i.id, name: i.name }])), at: data.stamp(),
       });
       await data.set("orders", o.id, { review: { rating: S.rv.n, comment, at: data.stamp() } });
       closeModal(); toast("¡Gracias por tu opinión!", "ok");
@@ -1321,6 +1398,9 @@ document.addEventListener("change", (e) => {
   if (!el) return;
   const fn = C[el.dataset.change];
   fn && fn(el.dataset, el);
+});
+document.addEventListener("input", (e) => {
+  if (e.target.closest && e.target.closest('form[data-form="addOffer"]')) updateComboHint();
 });
 document.addEventListener("submit", (e) => {
   const f = e.target.closest("form[data-form]");
