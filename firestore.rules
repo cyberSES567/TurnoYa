@@ -89,7 +89,7 @@ service cloud.firestore {
         signedIn() && !isBanned()
         && request.resource.data.customerUid == request.auth.uid
         && request.resource.data.status == 'espera'
-        && request.resource.data.createdAt == request.time
+        && request.resource.data.createdAt == request.time   // ← data.js ya manda serverTimestamp()
         && request.resource.data.get('discount', 0) == myDiscount()
         && businessOpen()
       );
@@ -108,6 +108,7 @@ service cloud.firestore {
         )
       );
 
+      // 🗑️ Dueño/admin puede borrar pedidos (botón basura en el frontend)
       allow delete: if isAdmin();
     }
 
@@ -168,6 +169,7 @@ service cloud.firestore {
         && request.resource.data.text.size() > 0
         && request.resource.data.text.size() <= 500;
       allow update: if false;
+      // 🗑️ Dueño/admin puede borrar mensaje del equipo (botón en el frontend)
       allow delete: if isAdmin();
     }
   }
