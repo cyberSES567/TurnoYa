@@ -1,9 +1,8 @@
 // Capa de datos: Firebase (tiempo real) + Cloudinary (imágenes) o modo demo local.
 import { CONFIG, DEFAULT_MENU } from "./config.js";
 
-// ⚠️ DATOS DE CLOUDINARY CONFIGURADOS
-const CLOUDINARY_CLOUD_NAME = "p6szlpdy"; 
-const CLOUDINARY_UPLOAD_PRESET = "turnoya_menu"; 
+const CLOUDINARY_CLOUD_NAME = "p6szlpdy";
+const CLOUDINARY_UPLOAD_PRESET = "turnoya_menu";
 
 export const isCloud = Boolean(CONFIG.firebase && CONFIG.firebase.apiKey);
 let impl;
@@ -25,6 +24,8 @@ if (isCloud) {
       email: (u.email || "").toLowerCase(),
       name: u.displayName || u.email || "Invitado",
       photo: u.photoURL || "",
+      verified: !!u.emailVerified,
+      google: u.providerData.some((p) => p.providerId === "google.com"),
     };
   const conv = (v) => (v && typeof v.toMillis === "function" ? v.toMillis() : v);
   const clean = (d) => {
@@ -34,6 +35,9 @@ if (isCloud) {
     return o;
   };
   const read = (s) => ({ id: s.id, ...clean(s.data({ serverTimestamps: "estimate" })) });
+  // Admite subcolecciones: "chats/UID/messages"
+  const colRef = (col) => fs.collection(db, ...col.split("/"));
+  const docRef = (col, id) => fs.doc(db, ...col.split("/"), id);
 
   impl = {
     onAuth: (cb) => authM.onAuthStateChanged(auth, (u) => cb(toUser(u))),
@@ -44,42 +48,47 @@ if (isCloud) {
     register: async (email, password, name) => {
       const cred = await authM.createUserWithEmailAndPassword(auth, email, password);
       if (name) await authM.updateProfile(cred.user, { displayName: name });
+      authM.sendEmailVerification(cred.user).catch(() => {});
       return cred.user;
     },
-    loginEmail: (email, password) =>
-      authM.signInWithEmailAndPassword(auth, email, password),
+    loginEmail: (email, password) => authM.signInWithEmailAndPassword(auth, email, password),
     resetPassword: (email) => authM.sendPasswordResetEmail(auth, email),
+    resendVerification: () => authM.sendEmailVerification(auth.currentUser),
+    recheck: async () => {
+      await auth.currentUser.reload();
+      await auth.currentUser.getIdToken(true);
+    },
+    claims: async () => (await auth.currentUser.getIdTokenResult(true)).claims,
+    refreshToken: () => auth.currentUser.getIdToken(true),
+    call: async (name, payload) => {
+      const f = await import(base + "firebase-functions.js");
+      const res = await f.httpsCallable(f.getFunctions(app), name)(payload || {});
+      return res.data;
+    },
 
-    // ── Subir Imágenes a Cloudinary ──
     uploadImage: async (file) => {
-  const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
-
-  const response = await fetch(url, {
-    method: "POST",
-    body: formData,
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    console.error("Cloudinary error:", response.status, data);
-    throw new Error(data?.error?.message || `HTTP ${response.status} al subir imagen`);
-  }
-
-  return data.secure_url;
-},
+      if (file.size > 5 * 1024 * 1024) throw new Error("La imagen supera los 5 MB");
+      const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+      const response = await fetch(url, { method: "POST", body: formData });
+      const out = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        console.error("Cloudinary error:", response.status, out);
+        throw new Error(out?.error?.message || `HTTP ${response.status} al subir imagen`);
+      }
+      return out.secure_url;
+    },
 
     watch(col, cb, where) {
-      let q = fs.collection(db, col);
+      let q = colRef(col);
       if (where) q = fs.query(q, fs.where(where[0], "==", where[1]));
       return fs.onSnapshot(q, (s) => cb(s.docs.map(read)), (e) => console.error("watch", col, e));
     },
     watchDoc(col, id, cb) {
       return fs.onSnapshot(
-        fs.doc(db, col, id),
+        docRef(col, id),
         (s) => cb(s.exists() ? read(s) : null, { pending: s.metadata.hasPendingWrites }),
         (e) => {
           console.error("watchDoc", col, id, e);
@@ -87,13 +96,13 @@ if (isCloud) {
         }
       );
     },
-    set: (col, id, d) => fs.setDoc(fs.doc(db, col, id), d, { merge: true }),
-    remove: (col, id) => fs.deleteDoc(fs.doc(db, col, id)),
+    set: (col, id, d) => fs.setDoc(docRef(col, id), d, { merge: true }),
+    remove: (col, id) => fs.deleteDoc(docRef(col, id)),
     newId: () => fs.doc(fs.collection(db, "orders")).id,
     stamp: () => fs.serverTimestamp(),
   };
 } else {
-  // ---------- MODO DEMO ----------
+  // ---------- MODO DEMO (localStorage) ----------
   const KEY = "turnoya_demo_db";
   const load = () => {
     try { return JSON.parse(localStorage.getItem(KEY)) || {}; }
@@ -109,8 +118,9 @@ if (isCloud) {
     seed.menu = {};
     DEFAULT_MENU.forEach((m, i) => (seed.menu["m" + i] = { ...m, available: true }));
     seed.staff = {
-      "receptor1@demo.com": { email: "receptor1@demo.com", role: "receptor", active: true },
-      "receptor2@demo.com": { email: "receptor2@demo.com", role: "receptor", active: true },
+      "mesero1@demo.com": { email: "mesero1@demo.com", role: "mesero", active: true },
+      "cocinero1@demo.com": { email: "cocinero1@demo.com", role: "cocinero", active: true },
+      "mod1@demo.com": { email: "mod1@demo.com", role: "moderador", active: true },
     };
     save(seed);
   }
@@ -119,6 +129,12 @@ if (isCloud) {
   let current = null;
   try { current = JSON.parse(sessionStorage.getItem("turnoya_demo_user")); } catch {}
   const emit = () => authSubs.forEach((f) => f(current));
+  const setUser = (u) => {
+    current = { ...u, verified: true, google: true };
+    sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
+    emit();
+    return current;
+  };
 
   impl = {
     onAuth(cb) {
@@ -126,45 +142,30 @@ if (isCloud) {
       setTimeout(() => cb(current), 0);
       return () => authSubs.delete(cb);
     },
-    login(p) {
-      const email = p.email.trim().toLowerCase();
-      current = { uid: "u_" + email.replace(/[^a-z0-9]/g, "_"), email, name: p.name || email, photo: "" };
-      sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
-      emit();
-    },
-    loginGuest: async () => {
-      current = { uid: "u_guest_" + Date.now(), email: "", name: "Invitado", photo: "" };
-      sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
-      emit();
-      return current;
-    },
+    login: async () => setUser({ uid: "u_demo", email: "demo@demo.com", name: "Demo", photo: "" }),
+    loginGuest: async () => setUser({ uid: "u_guest_" + Date.now(), email: "", name: "Invitado", photo: "" }),
     logout() {
       current = null;
       sessionStorage.removeItem("turnoya_demo_user");
       emit();
     },
-    register: async (email, password, name) => {
-      current = { uid: "u_" + email, email: email.toLowerCase(), name: name || email, photo: "" };
-      sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
-      emit();
-      return current;
-    },
-    loginEmail: async (email, password) => {
-      const u = { uid: "u_" + email, email: email.toLowerCase(), name: email, photo: "" };
-      sessionStorage.setItem("turnoya_demo_user", JSON.stringify(u));
-      current = u;
-      emit();
-      return u;
-    },
+    register: async (email, password, name) =>
+      setUser({ uid: "u_" + email.toLowerCase().replace(/[^a-z0-9]/g, "_"), email: email.toLowerCase(), name: name || email, photo: "" }),
+    loginEmail: async (email) =>
+      setUser({ uid: "u_" + email.toLowerCase().replace(/[^a-z0-9]/g, "_"), email: email.toLowerCase(), name: email, photo: "" }),
     resetPassword: async () => { throw new Error("No disponible en modo demo"); },
-    
-    uploadImage: async (file) => {
-      return new Promise((resolve) => {
+    resendVerification: async () => {},
+    recheck: async () => {},
+    claims: async () => ({}),
+    refreshToken: async () => {},
+    call: async () => { throw new Error("No disponible en modo demo"); },
+
+    uploadImage: (file) =>
+      new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result);
         reader.readAsDataURL(file);
-      });
-    },
+      }),
 
     watch(col, cb, where) {
       const run = () => {
