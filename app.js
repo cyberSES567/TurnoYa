@@ -483,7 +483,7 @@ function dishCard(m, rm) {
     ? `<div class="qty"><button data-act="sub" data-id="${esc(m.id)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(m.id)}">+</button></div>`
     : `<button class="btn sm" data-act="add" data-id="${esc(m.id)}">Agregar</button>`;
   const visual = m.imageUrl ? `<img src="${esc(m.imageUrl)}" alt="${esc(m.name)}" class="dish-img">` : `<div class="emo">${esc(m.emoji || "🍽️")}</div>`;
-   const offer = offerFor(m.id);
+  const offer = offerFor(m.id);
   let price = money(m.price);
   if (offer) {
     if (offer.type === "2x1") price = `${money(m.price)} <span class="chip ok">2x1</span>`;
@@ -492,6 +492,7 @@ function dishCard(m, rm) {
   }
   const r = rm[m.id];
   return `<div class="dish ${off ? "off" : ""}">${visual}<div class="dn">${esc(m.name)}</div><div class="dp">${price}</div>${r ? `<div class="rt"><span class="stars">★</span> ${(r.s / r.n).toFixed(1)} (${r.n})</div>` : ""}${ctl}</div>`;
+}
 function ofertasView() {
   const list = activeOffers();
   if (!list.length) return `<h2>Ofertas</h2><div class="empty" style="margin-top:12px">Por ahora no hay ofertas activas. ¡Vuelve pronto!</div>`;
@@ -499,11 +500,16 @@ function ofertasView() {
     const m = o.menuId ? S.menu.find((x) => x.id === o.menuId) : null;
     const q = m ? S.cart[m.id] || 0 : 0;
     let ctl = "";
-    if (m && o.offerPrice != null && o.offerPrice !== "") {
+    if (m) {
       const add = m.available === false ? `<span class="chip bad">Agotado</span>` : !isOpen() ? `<span class="chip">Cerrado</span>` : q
         ? `<div class="qty"><button data-act="sub" data-id="${esc(m.id)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(m.id)}">+</button></div>`
         : `<button class="btn sm" data-act="add" data-id="${esc(m.id)}">Agregar</button>`;
-      ctl = `<div class="line"><span><s>${money(m.price)}</s> <b style="color:var(--accent2)">${money(o.offerPrice)}</b> · ${esc(m.name)}</span>${add}</div>`;
+      let priceTxt;
+      if (o.type === "2x1") priceTxt = `<b style="color:var(--accent2)">2x1</b> · ${money(m.price)} · ${esc(m.name)}`;
+      else if (o.type === "pct") priceTxt = `<s>${money(m.price)}</s> <b style="color:var(--accent2)">${money(priceOf(m))}</b> · ${esc(m.name)}`;
+      else if (o.offerPrice != null && o.offerPrice !== "") priceTxt = `<s>${money(m.price)}</s> <b style="color:var(--accent2)">${money(o.offerPrice)}</b> · ${esc(m.name)}`;
+      else priceTxt = `${esc(m.name)}`;
+      ctl = `<div class="line"><span>${priceTxt}</span>${add}</div>`;
     }
     return `<article class="card offer">${o.imageUrl ? `<img src="${esc(o.imageUrl)}" alt="${esc(o.title)}">` : ""}<div class="ob">
       ${o.badge ? `<span class="tag">${esc(o.badge)}</span>` : ""}<h3>${esc(o.title)}</h3>${o.description ? `<p class="muted">${esc(o.description)}</p>` : ""}${ctl}</div></article>`;
@@ -530,7 +536,7 @@ function cartBar() {
   if ((S.tab !== "menu" && S.tab !== "ofertas") || !isOpen()) return "";
   const lines = cartLines();
   if (!lines.length) return "";
-  const n = lines.reduce((s, l) => s + l.qty, 0), total = lines.reduce((s, l) => s + l.qty * l.price, 0);
+  const n = lines.reduce((s, l) => s + l.qty, 0), total = lines.reduce((s, l) => s + l.lineTotal, 0);
   return `<div class="cartbar"><button class="btn" data-act="openCart"><span>Ver pedido (${n})</span><span>${money(total)}</span></button></div>`;
 }
 function loyaltyCard() {
@@ -575,7 +581,7 @@ function openCart() {
   if (!isOpen()) return toast("El negocio está cerrado", "bad");
   const lines = cartLines();
   if (!lines.length) return;
-  const sub = lines.reduce((s, l) => s + l.lineTotal, 0); // Usar lineTotal en lugar de price*qty
+  const sub = lines.reduce((s, l) => s + l.lineTotal, 0);
   const d = discPct(), total = r2(sub * (1 - d / 100));
   $modal.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" data-form="placeOrder">
     <h2>Tu pedido</h2>
@@ -707,7 +713,7 @@ function soporteView() {
     return `<button class="btn ghost sm" data-act="closeThread">← Conversaciones</button>
     <div style="display:flex; justify-content:space-between; align-items:center; margin:10px 0 2px">
       <div><h2>${esc(c?.customerName || "Cliente")}</h2><p class="muted" style="margin:0">${esc(c?.customerEmail || "")}</p></div>
-      <button class="btn sm bad" data-act="deleteChat" data-uid="${esc(c.id)}">Borrar Chat</button>
+      <button class="btn sm bad" data-act="deleteChat" data-uid="${esc(S.chatWith)}">Borrar Chat</button>
     </div>
     ${chatBox(S.thread, "support", "Responder al cliente…")}`;
   }
@@ -750,7 +756,7 @@ function ofertasAdmin() {
   <form class="card" style="margin:12px 0;display:grid;gap:8px" data-form="addOffer">
     <input id="ofTitle" name="title" required maxlength="50" placeholder="Título (ej. 2x1 en Chichas)">
     <textarea id="ofDesc" name="description" rows="2" maxlength="160" placeholder="Descripción"></textarea>
-    
+
     <select id="ofType" name="type" required>
       <option value="fixed">Precio Fijo (Descuento en S/)</option>
       <option value="2x1">2x1 (Lleva 2, paga 1)</option>
@@ -761,7 +767,7 @@ function ofertasAdmin() {
       <input id="ofBadge" name="badge" maxlength="14" placeholder="Etiqueta (ej. Oferta)">
       <select id="ofMenu" name="menuId" required><option value="">Elige un plato...</option>${[...S.menu].sort((a, b) => a.name.localeCompare(b.name)).map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${money(m.price)})</option>`).join("")}</select>
     </div>
-    
+
     <div class="row">
       <input id="ofPrice" name="offerPrice" type="number" step="0.1" min="0" placeholder="Nuevo Precio (Solo si es Precio Fijo)">
       <input id="ofPct" name="discountPct" type="number" step="1" min="1" max="99" placeholder="% de Descuento (Solo si es %)">
@@ -1030,7 +1036,7 @@ const A = {
   archiveChat(d) { data.set("chats", d.uid, { archived: true }).then(() => toast("Chat archivado", "ok")).catch(fail); },
   deleteChat(d) {
     if (confirm("¿Eliminar esta conversación permanentemente?")) {
-      data.remove("chats", d.uid).then(() => { if(S.chatWith === d.uid) A.closeThread(); toast("Chat eliminado", "ok"); }).catch(fail);
+      data.remove("chats", d.uid).then(() => { if (S.chatWith === d.uid) A.closeThread(); toast("Chat eliminado", "ok"); }).catch(fail);
     }
   },
 
@@ -1072,7 +1078,7 @@ const A = {
       o.subtotal ?? o.total, o.discount || 0, o.total, wName(o), o.cookName || "",
       o.acceptedAt ? Math.round((o.acceptedAt - o.createdAt) / 1000) : "", o.readyAt && o.cookAt ? Math.round((o.readyAt - o.cookAt) / 1000) : "", o.review?.rating ?? "",
     ]);
-    const csv = "﻿" + [head, ...rows].map((r) => r.map(q).join(",")).join("\r\n");
+    const csv = "\uFEFF" + [head, ...rows].map((r) => r.map(q).join(",")).join("\r\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     a.download = `historial_${histRange().from}_${histRange().to}.csv`;
@@ -1217,7 +1223,7 @@ const F = {
     if (!lines.length) return;
     const btn = f.querySelector("button:not([type])"); btn && (btn.disabled = true);
     const mesa = String(v.get("mesa")).trim();
-    const sub = lines.reduce((s, l) => s + l.price * l.qty, 0), d = discPct();
+    const sub = lines.reduce((s, l) => s + l.lineTotal, 0), d = discPct();
     try {
       await data.set("orders", data.newId(), {
         customerUid: S.user.uid, customerEmail: S.user.email || "Invitado", customerName: S.user.name || "Invitado",
