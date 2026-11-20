@@ -57,7 +57,7 @@ const S = {
   user: null, role: null, isOwner: false, gate: null, loading: true, offset: 0,
   menu: [], orders: [], staff: [], banned: [], users: [], offers: [], reviews: [], chats: [], loyaltyAll: [], team: [], thread: [],
   myLoyalty: null, myChat: null, chatWith: null, biz: null,
-  tab: null, cart: {}, mesa: new URLSearchParams(location.search).get("mesa") || "", rv: null, etaFor: null, rvFilter: "",
+  tab: null, cart: {}, mesa: new URLSearchParams(location.search).get("mesa") || "", rv: null, etaFor: null, rvFilter: "", selMsgs: new Set(),
 };
 let authUnsubs = [], roleUnsubs = [], threadUnsub = null;
 let seen = null, prevStatus = {}, lateAlerted = new Set(), seeded = false, seq = 0;
@@ -174,7 +174,7 @@ data.onAuth((user) => {
   stopRole();
   Object.assign(S, {
     user, role: null, gate: null, loading: !!user, cart: {}, orders: [], menu: [], staff: [], banned: [], users: [], offers: [], reviews: [],
-    chats: [], loyaltyAll: [], team: [], thread: [], myLoyalty: null, myChat: null, chatWith: null, biz: null, offset: 0, isOwner: false,
+    chats: [], loyaltyAll: [], team: [], thread: [], myLoyalty: null, myChat: null, chatWith: null, biz: null, offset: 0, isOwner: false, selMsgs: new Set(),
   });
   seen = null; prevStatus = {}; lateAlerted = new Set(); seeded = false;
   closeModal();
@@ -444,9 +444,15 @@ function gateView() {
 function chatBox(msgs, kind, placeholder) {
   const me = S.user.uid;
   const list = [...msgs].sort((a, b) => (a.at || 0) - (b.at || 0));
-  return `<div class="card chat"><div class="msgs" id="msgs">${list.map((m) => {
-    const mine = m.fromUid === me;
-    return `<div class="msg ${mine ? "me" : "them"}"><small>${mine ? "Tú" : esc(first(m.fromName))}${!mine && m.fromRole ? " · " + esc(ROLE_LABEL[m.fromRole] || "") : ""} · ${hm(m.at || now())}</small><p>${esc(m.text)}</p></div>`;
+  const canDel = kind === "team" && S.isOwner; // solo el dueño borra mensajes del equipo
+  const sel = new Set([...S.selMsgs].filter((id) => list.some((m) => m.id === id)));
+  const bar = canDel && list.length
+    ? `<div class="line" style="padding:6px 10px;gap:8px;flex-wrap:wrap"><span class="muted">Toca un mensaje para seleccionarlo</span><span style="display:flex;gap:6px"><button type="button" class="btn sm ghost" data-act="selAllMsgs">${sel.size === list.length ? "Quitar selección" : "Seleccionar todos"}</button><button type="button" class="btn sm bad" data-act="delSelMsgs" ${sel.size ? "" : "disabled"}>🗑️ Eliminar${sel.size ? ` (${sel.size})` : ""}</button></span></div>`
+    : "";
+  return `<div class="card chat">${bar}<div class="msgs" id="msgs">${list.map((m) => {
+    const mine = m.fromUid === me, on = sel.has(m.id);
+    const pick = canDel ? ` data-act="selMsg" data-id="${esc(m.id)}" style="cursor:pointer;${on ? "outline:2px solid var(--accent2);outline-offset:2px;" : ""}"` : "";
+    return `<div class="msg ${mine ? "me" : "them"}"${pick}><small>${canDel ? (on ? "☑ " : "☐ ") : ""}${mine ? "Tú" : esc(first(m.fromName))}${!mine && m.fromRole ? " · " + esc(ROLE_LABEL[m.fromRole] || "") : ""} · ${hm(m.at || now())}</small><p>${esc(m.text)}</p></div>`;
   }).join("") || `<div class="empty">Aún no hay mensajes.</div>`}</div>
   <form class="chatform" data-form="chat" data-kind="${kind}"><input id="chatInput" name="text" maxlength="500" autocomplete="off" required placeholder="${esc(placeholder)}"><button class="btn">Enviar</button></form></div>`;
 }
@@ -570,7 +576,7 @@ function cartBar() {
   const lines = cartLines();
   if (!lines.length) return "";
   const n = lines.reduce((s, l) => s + l.qty, 0), total = lines.reduce((s, l) => s + l.lineTotal, 0);
-  return `<div class="cartbar"><button class="btn" data-act="openCart"><span>Ver pedido (${n})</span><span>${money(total)}</span></button></div>`;
+  return `<div class="cartbar" style="display:flex;gap:8px;align-items:stretch"><button class="btn" data-act="openCart" style="flex:1"><span>Ver pedido (${n})</span><span>${money(total)}</span></button><button class="btn bad" data-act="clearCart" title="Vaciar pedido" aria-label="Vaciar pedido" style="flex:0 0 auto;padding:0 16px">🗑️</button></div>`;
 }
 function loyaltyCard() {
   if (!S.user.email) return `<div class="card loyal"><b>Acumula descuentos</b><p class="muted">Crea tu cuenta con correo o Google: cada pedido entregado suma para obtener hasta −${CONFIG.loyaltyMax}%.</p></div>`;
@@ -618,7 +624,7 @@ function openCart() {
   const d = discPct(), total = r2(sub * (1 - d / 100));
   $modal.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" data-form="placeOrder">
     <h2>Tu pedido</h2>
-    ${lines.map((l) => `<div class="line"><span>${l.qty}× ${esc(l.name)} ${l.combo ? '<span class="chip ok" style="font-size:0.6rem">Combo</span>' : offerFor(l.id)?.type === '2x1' ? '<span class="chip ok" style="font-size:0.6rem">2x1</span>' : ''}${incl(l)}</span><b>${money(l.lineTotal)}</b></div>`).join("")}
+    ${lines.map((l) => `<div class="line"><span>${l.qty}× ${esc(l.name)} ${l.combo ? '<span class="chip ok" style="font-size:0.6rem">Combo</span>' : offerFor(l.id)?.type === '2x1' ? '<span class="chip ok" style="font-size:0.6rem">2x1</span>' : ''}${incl(l)}</span><span style="display:flex;align-items:center;gap:8px"><b>${money(l.lineTotal)}</b><button type="button" class="icon-btn" data-act="removeLine" data-id="${esc(l.id)}" title="Quitar del pedido" aria-label="Quitar ${esc(l.name)} del pedido">🗑️</button></span></div>`).join("")}
     ${d ? `<div class="line"><span>Subtotal</span><span>${money(sub)}</span></div><div class="line dsc"><span>Descuento de cliente frecuente −${d}%</span><span>−${money(r2(sub - total))}</span></div>` : ""}
     <div class="line tot"><span>Total</span><b>${money(total)}</b></div>
     <label class="lbl">Número de mesa<input name="mesa" required maxlength="6" inputmode="numeric" value="${esc(S.mesa)}" placeholder="Ej. 5"></label>
@@ -1022,7 +1028,10 @@ function adminMenu() {
 }
 
 /* ====================== acciones ====================== */
-const fail = (e) => { console.error(e); toast(e?.code === "permission-denied" ? "No tienes permiso para esta acción" : "Algo falló, intenta de nuevo", "bad"); };
+const fail = (e, what) => {
+  console.error("[yaTA] error" + (what ? " en " + what : ""), e?.code, e?.message || e);
+  toast(e?.code === "permission-denied" ? "No tienes permiso para esta acción" + (what ? ` (${what})` : "") : "Algo falló, intenta de nuevo", "bad");
+};
 
 const A = {
   async login() { try { await data.login(); } catch (e) { if (e?.code !== "auth/popup-closed-by-user") toast("No se pudo iniciar sesión: " + (e.code || e.message), "bad"); } },
@@ -1049,7 +1058,7 @@ const A = {
   sendCode: () => data.call("sendOwnerCode").then(() => toast("Código enviado a tu Gmail", "ok")).catch((e) => toast(e.message || "No se pudo enviar el código", "bad")),
 
   tab(d) {
-    S.tab = d.t; render(); scrollTo(0, 0);
+    S.tab = d.t; S.selMsgs.clear(); render(); scrollTo(0, 0);
     if (S.role === "cliente" && d.t === "ayuda" && S.myChat?.unreadClient) data.set("chats", S.user.uid, { unreadClient: false }).catch(() => {});
   },
   add(d) {
@@ -1057,6 +1066,38 @@ const A = {
     S.cart[d.id] = (S.cart[d.id] || 0) + 1; render();
   },
   sub(d) { S.cart[d.id] = (S.cart[d.id] || 1) - 1; if (S.cart[d.id] <= 0) delete S.cart[d.id]; render(); },
+  removeLine(d) {
+    delete S.cart[d.id];
+    if (!cartLines().length) { S.cart = {}; closeModal(); return render(); }
+    const mesa = $modal.querySelector('[name="mesa"]')?.value, note = $modal.querySelector('[name="note"]')?.value;
+    if (mesa != null) S.mesa = mesa;
+    openCart();
+    const nEl = $modal.querySelector('[name="note"]');
+    if (nEl && note) nEl.value = note;
+    render();
+  },
+  clearCart() {
+    if (!confirm("¿Vaciar tu pedido?")) return;
+    S.cart = {}; closeModal(); render();
+  },
+  selMsg(d) { S.selMsgs.has(d.id) ? S.selMsgs.delete(d.id) : S.selMsgs.add(d.id); render(); },
+  selAllMsgs() {
+    const ids = S.team.map((m) => m.id);
+    if (ids.length && ids.every((id) => S.selMsgs.has(id))) S.selMsgs.clear();
+    else ids.forEach((id) => S.selMsgs.add(id));
+    render();
+  },
+  async delSelMsgs() {
+    if (!S.isOwner) return;
+    const ids = [...S.selMsgs].filter((id) => S.team.some((m) => m.id === id));
+    if (!ids.length) return;
+    if (!confirm(ids.length === 1 ? "¿Eliminar este mensaje del chat del equipo?" : `¿Eliminar ${ids.length} mensajes del chat del equipo?`)) return;
+    try {
+      for (const id of ids) await data.remove("teamchat", id);
+      S.selMsgs.clear(); render();
+      toast(ids.length === 1 ? "Mensaje eliminado" : `${ids.length} mensajes eliminados`, "ok");
+    } catch (e) { fail(e, "borrar mensajes"); render(); }
+  },
   openCart, closeModal,
   backdrop(d, el, e) { if (e.target === el) closeModal(); },
   openReview: (d) => openReview(d.id),
@@ -1310,7 +1351,7 @@ const F = {
       S.mesa = mesa; S.cart = {}; S.tab = "pedidos";
       closeModal(); render();
       toast("Tu pedido fue enviado. Te avisaremos en cada etapa.", "ok", "¡Pedido enviado!");
-    } catch (e) { btn && (btn.disabled = false); fail(e); }
+    } catch (e) { btn && (btn.disabled = false); fail(e, "crear pedido"); }
   },
 
   async review(f) {
