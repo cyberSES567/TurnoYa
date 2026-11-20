@@ -575,11 +575,11 @@ function openCart() {
   if (!isOpen()) return toast("El negocio está cerrado", "bad");
   const lines = cartLines();
   if (!lines.length) return;
-  const sub = lines.reduce((s, l) => s + l.price * l.qty, 0);
+  const sub = lines.reduce((s, l) => s + l.lineTotal, 0); // Usar lineTotal en lugar de price*qty
   const d = discPct(), total = r2(sub * (1 - d / 100));
   $modal.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" data-form="placeOrder">
     <h2>Tu pedido</h2>
-    ${lines.map((l) => `<div class="line"><span>${l.qty}× ${esc(l.name)}</span><b>${money(l.price * l.qty)}</b></div>`).join("")}
+    ${lines.map((l) => `<div class="line"><span>${l.qty}× ${esc(l.name)} ${offerFor(l.id)?.type === '2x1' ? '<span class="chip ok" style="font-size:0.6rem">2x1</span>' : ''}</span><b>${money(l.lineTotal)}</b></div>`).join("")}
     ${d ? `<div class="line"><span>Subtotal</span><span>${money(sub)}</span></div><div class="line dsc"><span>Descuento de cliente frecuente −${d}%</span><span>−${money(r2(sub - total))}</span></div>` : ""}
     <div class="line tot"><span>Total</span><b>${money(total)}</b></div>
     <label class="lbl">Número de mesa<input name="mesa" required maxlength="6" inputmode="numeric" value="${esc(S.mesa)}" placeholder="Ej. 5"></label>
@@ -705,13 +705,20 @@ function soporteView() {
   if (S.chatWith) {
     const c = S.chats.find((x) => x.id === S.chatWith);
     return `<button class="btn ghost sm" data-act="closeThread">← Conversaciones</button>
-    <h2 style="margin:10px 0 2px">${esc(c?.customerName || "Cliente")}</h2><p class="muted" style="margin-bottom:10px">${esc(c?.customerEmail || "")}</p>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin:10px 0 2px">
+      <div><h2>${esc(c?.customerName || "Cliente")}</h2><p class="muted" style="margin:0">${esc(c?.customerEmail || "")}</p></div>
+      <button class="btn sm bad" data-act="deleteChat" data-uid="${esc(c.id)}">Borrar Chat</button>
+    </div>
     ${chatBox(S.thread, "support", "Responder al cliente…")}`;
   }
-  const list = [...S.chats].sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  const list = S.chats.filter(c => !c.archived).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
   return `<h2>Soporte</h2><p class="muted" style="margin:4px 0 12px">Conversaciones con clientes.</p>
   <div class="card">${list.map((c) => `<div class="item"><div><b>${c.unreadStaff ? `<span class="dot"></span>` : ""}${esc(c.customerName || "Cliente")}</b><div class="muted">${esc(c.lastText || "")} · ${c.lastAt ? hm(c.lastAt) : ""}</div></div>
-    <button class="btn sm" data-act="openThread" data-uid="${esc(c.id)}">Abrir</button></div>`).join("") || `<span class="muted">Aún no hay conversaciones.</span>`}</div>`;
+    <div class="acts">
+      <button class="btn sm" data-act="openThread" data-uid="${esc(c.id)}">Abrir</button>
+      <button class="btn sm ghost" data-act="archiveChat" data-uid="${esc(c.id)}" title="Cerrar y archivar">Archivar</button>
+      <button class="btn sm bad" data-act="deleteChat" data-uid="${esc(c.id)}" title="Eliminar">🗑️</button>
+    </div></div>`).join("") || `<span class="muted">Aún no hay conversaciones.</span>`}</div>`;
 }
 function clientesView() {
   const map = {};
@@ -741,15 +748,31 @@ function ofertasAdmin() {
   const items = [...S.offers].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   return `<h2>Ofertas</h2>
   <form class="card" style="margin:12px 0;display:grid;gap:8px" data-form="addOffer">
-    <input id="ofTitle" name="title" required maxlength="50" placeholder="Título (ej. 2x1 en limonadas)">
+    <input id="ofTitle" name="title" required maxlength="50" placeholder="Título (ej. 2x1 en Chichas)">
     <textarea id="ofDesc" name="description" rows="2" maxlength="160" placeholder="Descripción"></textarea>
-    <div class="row"><input id="ofBadge" name="badge" maxlength="14" placeholder="Etiqueta (ej. −20%)"><select id="ofMenu" name="menuId"><option value="">Sin plato asociado</option>${[...S.menu].sort((a, b) => a.name.localeCompare(b.name)).map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${money(m.price)})</option>`).join("")}</select></div>
-    <input id="ofPrice" name="offerPrice" type="number" step="0.1" min="0" placeholder="Precio de oferta (solo si eliges un plato)">
+    
+    <select id="ofType" name="type" required>
+      <option value="fixed">Precio Fijo (Descuento en S/)</option>
+      <option value="2x1">2x1 (Lleva 2, paga 1)</option>
+      <option value="pct">Descuento Porcentual (%)</option>
+    </select>
+
+    <div class="row">
+      <input id="ofBadge" name="badge" maxlength="14" placeholder="Etiqueta (ej. Oferta)">
+      <select id="ofMenu" name="menuId" required><option value="">Elige un plato...</option>${[...S.menu].sort((a, b) => a.name.localeCompare(b.name)).map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${money(m.price)})</option>`).join("")}</select>
+    </div>
+    
+    <div class="row">
+      <input id="ofPrice" name="offerPrice" type="number" step="0.1" min="0" placeholder="Nuevo Precio (Solo si es Precio Fijo)">
+      <input id="ofPct" name="discountPct" type="number" step="1" min="1" max="99" placeholder="% de Descuento (Solo si es %)">
+    </div>
+
     <label class="lbl" style="margin:0">Imagen (opcional)<input name="image" type="file" accept="image/*"></label>
     <button class="btn">Publicar oferta</button></form>
   <div class="card">${items.map((o) => { const m = S.menu.find((x) => x.id === o.menuId); return `<div class="item"><div style="display:flex;align-items:center;gap:12px">
     ${o.imageUrl ? `<img src="${esc(o.imageUrl)}" style="width:48px;height:48px;object-fit:cover;border-radius:8px" alt="">` : ""}
-    <div><b>${esc(o.title)}</b> ${o.badge ? `<span class="chip estimado">${esc(o.badge)}</span>` : ""}<div class="muted">${m ? `${esc(m.name)} a ${money(o.offerPrice)}` : "Promoción informativa"} · ${o.active === false ? "Pausada" : "Activa"}</div></div></div>
+    <div><b>${esc(o.title)}</b> ${o.badge ? `<span class="chip estimado">${esc(o.badge)}</span>` : ""}
+    <div class="muted">${m ? `${esc(m.name)} (${o.type === '2x1' ? '2x1' : o.type === 'pct' ? `-${o.discountPct}%` : money(o.offerPrice)})` : "Promoción"} · ${o.active === false ? "Pausada" : "Activa"}</div></div></div>
     <div class="acts"><button class="btn sm ghost" data-act="toggleOffer" data-id="${esc(o.id)}">${o.active === false ? "Activar" : "Pausar"}</button><button class="btn sm bad" data-act="delOffer" data-id="${esc(o.id)}">Eliminar</button></div></div>`; }).join("") || `<span class="muted">Sin ofertas</span>`}</div>`;
 }
 function resenasAdmin() {
@@ -820,7 +843,7 @@ function adminResumen() {
 }
 /* ---------- Historial (todos los días guardados, con filtro de fechas) ---------- */
 function histRange() {
-  return (S.hist ??= { from: ymd(now() - 6 * 86400000), to: ymd(now()) });
+  return (S.hist ??= { from: ymd(now() - 30 * 86400000), to: ymd(now()) });
 }
 function histOrders() {
   const h = histRange(), a = dayStart(h.from), b = dayEnd(h.to);
@@ -856,7 +879,7 @@ function adminHistorial() {
 
   return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2>Historial</h2><button class="btn ghost sm" data-act="exportCsv">Descargar CSV</button></div>
   <div class="card" style="margin:12px 0;display:grid;gap:10px">
-    <div style="display:flex;gap:6px;flex-wrap:wrap">${[["today", "Hoy"], ["7", "7 días"], ["30", "30 días"], ["month", "Este mes"]].map(([k, l]) => `<button class="btn sm ghost" data-act="histPreset" data-k="${k}">${l}</button>`).join("")}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${[["today", "Hoy"], ["7", "7 días"], ["30", "30 días"], ["month", "Este mes"], ["all", "Ver Todo"]].map(([k, l]) => `<button class="btn sm ghost" data-act="histPreset" data-k="${k}">${l}</button>`).join("")}</div>
     <div class="row"><label class="lbl" style="margin:0">Desde<input type="date" value="${h.from}" data-change="histRange" data-r="from"></label>
     <label class="lbl" style="margin:0">Hasta<input type="date" value="${h.to}" data-change="histRange" data-r="to"></label></div>
     <p class="muted">Se guardan todos los pedidos; aquí eliges qué días ver. No incluye los datos de ejemplo.</p>
@@ -1004,6 +1027,12 @@ const A = {
     render();
   },
   closeThread() { threadUnsub && threadUnsub(); threadUnsub = null; S.chatWith = null; S.thread = []; render(); },
+  archiveChat(d) { data.set("chats", d.uid, { archived: true }).then(() => toast("Chat archivado", "ok")).catch(fail); },
+  deleteChat(d) {
+    if (confirm("¿Eliminar esta conversación permanentemente?")) {
+      data.remove("chats", d.uid).then(() => { if(S.chatWith === d.uid) A.closeThread(); toast("Chat eliminado", "ok"); }).catch(fail);
+    }
+  },
 
   // admin / moderación
   toggleStaff(d) { const s = S.staff.find((x) => x.id === d.email); s && data.set("staff", d.email, { active: !s.active }).catch(fail); },
@@ -1027,7 +1056,10 @@ const A = {
   applyLoyalty(d) { setLoyalty(d.uid, d.email, d.name, Number(d.pct)); },
   histPreset(d) {
     const t = now(), to = ymd(t);
-    const from = d.k === "today" ? to : d.k === "month" ? ymd(new Date(new Date(t).getFullYear(), new Date(t).getMonth(), 1).getTime()) : ymd(t - (Number(d.k) - 1) * 86400000);
+    let from = to;
+    if (d.k === "all") from = "2000-01-01";
+    else if (d.k === "month") from = ymd(new Date(new Date(t).getFullYear(), new Date(t).getMonth(), 1).getTime());
+    else if (d.k !== "today") from = ymd(t - (Number(d.k) - 1) * 86400000);
     S.hist = { from, to }; render();
   },
   exportCsv() {
@@ -1155,8 +1187,14 @@ const F = {
     const btn = f.querySelector("button");
     let imageUrl = "";
     const menuId = String(v.get("menuId") || "");
+    const type = String(v.get("type") || "fixed");
     const priceRaw = String(v.get("offerPrice") || "");
-    if (menuId && priceRaw === "") return toast("Indica el precio de oferta para el plato elegido", "bad");
+    const pctRaw = String(v.get("discountPct") || "");
+
+    if (!menuId) return toast("Elige un plato para la oferta", "bad");
+    if (type === "fixed" && priceRaw === "") return toast("Indica el precio de oferta", "bad");
+    if (type === "pct" && pctRaw === "") return toast("Indica el % de descuento", "bad");
+
     if (file && file.size > 0) {
       if (btn) { btn.disabled = true; btn.textContent = "Subiendo imagen..."; }
       try { imageUrl = await data.uploadImage(file); }
@@ -1167,7 +1205,8 @@ const F = {
     }
     data.set("offers", data.newId(), {
       title: String(v.get("title")).trim(), description: String(v.get("description") || "").trim(), badge: String(v.get("badge") || "").trim(),
-      menuId, offerPrice: menuId ? Number(priceRaw) : null, imageUrl, active: true, createdAt: data.stamp(), by: S.user.email || "",
+      menuId, type, offerPrice: type === "fixed" ? Number(priceRaw) : null, discountPct: type === "pct" ? Number(pctRaw) : null,
+      imageUrl, active: true, createdAt: data.stamp(), by: S.user.email || "",
     }).then(() => { f.reset(); if (btn) { btn.disabled = false; btn.textContent = "Publicar oferta"; } render(); toast("Oferta publicada", "ok"); }).catch((e) => { if (btn) { btn.disabled = false; btn.textContent = "Publicar oferta"; } fail(e); });
   },
 
