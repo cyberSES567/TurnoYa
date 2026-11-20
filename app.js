@@ -17,6 +17,9 @@ const first = (n) => String(n || "").split(" ")[0];
 const short = (id) => String(id).slice(-4).toUpperCase();
 const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 const r2 = (n) => Math.round(n * 100) / 100;
+const ymd = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const dayStart = (s) => new Date(s + "T00:00:00").getTime();
+const dayEnd = (s) => new Date(s + "T23:59:59.999").getTime();
 const hm = (t) => new Date(t).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
 const dmy = (t) => new Date(t).toLocaleDateString("es-PE", { day: "2-digit", month: "short" });
 const SLA = CONFIG.acceptSlaSeconds * 1000;
@@ -41,7 +44,7 @@ const ACTIVE = ["espera", "cocina", "estimado", "preparando", "listo"];
 const IN_KITCHEN = ["cocina", "estimado", "preparando"];
 
 const NAV = {
-  admin: [["resumen", "Resumen"], ["equipo", "Equipo"], ["menu", "Menú"], ["ofertas", "Ofertas"], ["resenas", "Reseñas"], ["clientes", "Clientes"], ["soporte", "Soporte"], ["team", "Chat equipo"]],
+  admin: [["resumen", "Resumen"], ["historial", "Historial"], ["equipo", "Equipo"], ["menu", "Menú"], ["ofertas", "Ofertas"], ["resenas", "Reseñas"], ["clientes", "Clientes"], ["soporte", "Soporte"], ["team", "Chat equipo"]],
   moderador: [["clientes", "Clientes"], ["soporte", "Soporte"], ["ofertas", "Ofertas"], ["resenas", "Reseñas"], ["team", "Chat equipo"]],
   mesero: [["espera", "Nuevos"], ["cocina", "En cocina"], ["listo", "Por entregar"], ["team", "Chat equipo"]],
   cocinero: [["cola", "Cola"], ["curso", "En curso"], ["team", "Chat equipo"]],
@@ -52,7 +55,7 @@ const NAV = {
 const S = {
   user: null, role: null, isOwner: false, gate: null, loading: true, offset: 0,
   menu: [], orders: [], staff: [], banned: [], users: [], offers: [], reviews: [], chats: [], loyaltyAll: [], team: [], thread: [],
-  myLoyalty: null, myChat: null, chatWith: null,
+  myLoyalty: null, myChat: null, chatWith: null, biz: null,
   tab: null, cart: {}, mesa: new URLSearchParams(location.search).get("mesa") || "", rv: null, etaFor: null, rvFilter: "",
 };
 let authUnsubs = [], roleUnsubs = [], threadUnsub = null;
@@ -60,6 +63,8 @@ let seen = null, prevStatus = {}, lateAlerted = new Set(), seeded = false, seq =
 let chatSeen = null, prevChat = {}, teamSeen = null, threadSeen = null;
 const now = () => Date.now() + S.offset;
 const startOfDay = () => { const d = new Date(now()); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// Si el documento settings/business no existe, el negocio se considera abierto.
+const isOpen = () => S.biz?.open !== false;
 
 /* ====================== sonido y avisos ====================== */
 let ac;
@@ -156,7 +161,7 @@ data.onAuth((user) => {
   stopRole();
   Object.assign(S, {
     user, role: null, gate: null, loading: !!user, cart: {}, orders: [], menu: [], staff: [], banned: [], users: [], offers: [], reviews: [],
-    chats: [], loyaltyAll: [], team: [], thread: [], myLoyalty: null, myChat: null, chatWith: null, offset: 0, isOwner: false,
+    chats: [], loyaltyAll: [], team: [], thread: [], myLoyalty: null, myChat: null, chatWith: null, biz: null, offset: 0, isOwner: false,
   });
   seen = null; prevStatus = {}; lateAlerted = new Set(); seeded = false;
   closeModal();
@@ -201,6 +206,7 @@ function startRole() {
   const w = (col, key, where, after) =>
     roleUnsubs.push(data.watch(col, (rows) => { S[key] = rows; after && after(rows); render(); }, where));
   const R = S.role;
+  roleUnsubs.push(data.watchDoc("settings", "business", (d) => { S.biz = d; render(); }));
   if (R === "admin") {
     w("menu", "menu", null, seedMenuIfEmpty); w("orders", "orders"); w("staff", "staff"); w("banned", "banned"); w("users", "users");
     w("offers", "offers"); w("reviews", "reviews"); w("chats", "chats", null, onChats); w("loyalty", "loyaltyAll"); w("teamchat", "team", null, onTeam);
@@ -340,9 +346,15 @@ function view() {
   if (S.role === "baneado")
     return topbar() + `<main class="wrap"><div class="empty"><h2>Cuenta bloqueada</h2><p class="muted" style="margin-top:8px">El equipo bloqueó esta cuenta. Si crees que es un error, habla con el personal del local.</p></div></main>`;
   const body = { admin: adminView, moderador: modView, mesero: meseroView, cocinero: cocineroView, cliente: clienteView }[S.role]();
-  return topbar() + nav() + `<main class="wrap">${verifyBanner()}${body}</main>` + (S.role === "cliente" ? cartBar() : "");
+  return topbar() + nav() + `<main class="wrap">${verifyBanner()}${closedBanner()}${body}</main>` + (S.role === "cliente" ? cartBar() : "");
 }
 
+function closedBanner() {
+  if (isOpen()) return "";
+  if (S.role === "cliente") return `<div class="alert"><b>Negocio cerrado.</b> Por ahora no se reciben pedidos nuevos; podrás pedir apenas abramos. Los pedidos que ya hiciste siguen su curso.</div>`;
+  if (S.isOwner) return `<div class="alert soft"><b>El negocio está cerrado:</b> los clientes no pueden hacer pedidos nuevos. Usa «Abrir negocio» para habilitarlos.</div>`;
+  return "";
+}
 function verifyBanner() {
   if (!isCloud || !S.user.email || S.user.verified) return "";
   return `<div class="alert soft">Verifica tu correo para activar tu cuenta por completo (los permisos del equipo requieren correo verificado).<br>
@@ -355,6 +367,8 @@ function topbar() {
   const canNotif = "Notification" in window && Notification.permission === "default";
   return `<header class="top">
     <div class="brand">yaTA!<small>${esc(CONFIG.restaurantName)}</small></div><div class="sp"></div>
+    ${S.role && S.role !== "baneado" && !S.isOwner ? `<span class="chip ${isOpen() ? "ok" : "bad"}">${isOpen() ? "Abierto" : "Cerrado"}</span>` : ""}
+    ${S.isOwner ? `<button class="btn sm ${isOpen() ? "bad" : "ok"}" data-act="toggleBiz">${isOpen() ? "Cerrar negocio" : "Abrir negocio"}</button>` : ""}
     ${label ? `<span class="badge">${label}</span>` : ""}
     ${canNotif ? `<button class="icon-btn" data-act="notif" title="Activar avisos del sistema">🔔</button>` : ""}
     <div class="avatar" title="${esc(u.email || u.name)}">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc((u.name || "?")[0].toUpperCase())}</div>
@@ -448,6 +462,8 @@ function dishCard(m, rm) {
   const off = m.available === false;
   const ctl = off
     ? `<span class="chip bad">Agotado</span>`
+    : !isOpen()
+    ? `<span class="chip">Cerrado</span>`
     : q
     ? `<div class="qty"><button data-act="sub" data-id="${esc(m.id)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(m.id)}">+</button></div>`
     : `<button class="btn sm" data-act="add" data-id="${esc(m.id)}">Agregar</button>`;
@@ -465,7 +481,7 @@ function ofertasView() {
     const q = m ? S.cart[m.id] || 0 : 0;
     let ctl = "";
     if (m && o.offerPrice != null && o.offerPrice !== "") {
-      const add = m.available === false ? `<span class="chip bad">Agotado</span>` : q
+      const add = m.available === false ? `<span class="chip bad">Agotado</span>` : !isOpen() ? `<span class="chip">Cerrado</span>` : q
         ? `<div class="qty"><button data-act="sub" data-id="${esc(m.id)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(m.id)}">+</button></div>`
         : `<button class="btn sm" data-act="add" data-id="${esc(m.id)}">Agregar</button>`;
       ctl = `<div class="line"><span><s>${money(m.price)}</s> <b style="color:var(--accent2)">${money(o.offerPrice)}</b> · ${esc(m.name)}</span>${add}</div>`;
@@ -492,7 +508,7 @@ function ayudaView() {
   return `<h2>Ayuda</h2><p class="muted" style="margin:4px 0 12px">¿Tuviste algún problema con tu pedido? Escríbenos y un moderador te responderá.</p>${chatBox(S.thread, "support", "Escribe tu mensaje…")}`;
 }
 function cartBar() {
-  if (S.tab !== "menu" && S.tab !== "ofertas") return "";
+  if ((S.tab !== "menu" && S.tab !== "ofertas") || !isOpen()) return "";
   const lines = cartLines();
   if (!lines.length) return "";
   const n = lines.reduce((s, l) => s + l.qty, 0), total = lines.reduce((s, l) => s + l.qty * l.price, 0);
@@ -537,6 +553,7 @@ function myOrderCard(o) {
   </article>`;
 }
 function openCart() {
+  if (!isOpen()) return toast("El negocio está cerrado", "bad");
   const lines = cartLines();
   if (!lines.length) return;
   const sub = lines.reduce((s, l) => s + l.price * l.qty, 0);
@@ -726,7 +743,7 @@ function resenasAdmin() {
 
 /* ====================== ADMIN ====================== */
 function adminView() {
-  return ({ resumen: adminResumen, equipo: adminEquipo, menu: adminMenu, ofertas: ofertasAdmin, resenas: resenasAdmin, clientes: clientesView, soporte: soporteView, team: teamView }[S.tab] || adminResumen)();
+  return ({ resumen: adminResumen, historial: adminHistorial, equipo: adminEquipo, menu: adminMenu, ofertas: ofertasAdmin, resenas: resenasAdmin, clientes: clientesView, soporte: soporteView, team: teamView }[S.tab] || adminResumen)();
 }
 function adminResumen() {
   const t = now(), t0 = startOfDay();
@@ -782,6 +799,78 @@ function adminResumen() {
   ${waiting.length ? `<h2 class="sec">En espera ahora</h2><div class="card">${waiting.map((o) => `<div class="line"><span>Mesa ${esc(o.mesa)} · ${esc(first(o.customerName))}</span><span class="timer" data-since="${o.createdAt}" data-mode="sla"><b>0:00</b></span></div>`).join("")}</div>` : ""}
   <div class="row" style="margin-top:22px"><button class="btn ghost sm" data-act="seedDemo">Generar datos de ejemplo</button>${hasDemo ? `<button class="btn ghost sm" data-act="clearDemo">Borrar datos de ejemplo</button>` : ""}</div>`;
 }
+/* ---------- Historial (todos los días guardados, con filtro de fechas) ---------- */
+function histRange() {
+  return (S.hist ??= { from: ymd(now() - 6 * 86400000), to: ymd(now()) });
+}
+function histOrders() {
+  const h = histRange(), a = dayStart(h.from), b = dayEnd(h.to);
+  return S.orders.filter((o) => !o.demo && o.createdAt >= a && o.createdAt <= b);
+}
+function adminHistorial() {
+  const h = histRange();
+  const all = histOrders();
+  const valid = all.filter((o) => o.status !== "cancelado");
+  const done = all.filter((o) => o.status === "entregado");
+  const canceled = all.length - valid.length;
+  const income = done.reduce((s, o) => s + (o.total || 0), 0);
+  const disc = done.reduce((s, o) => s + Math.max(0, (o.subtotal || o.total || 0) - (o.total || 0)), 0);
+  const st = stats(valid);
+  const emailOf = (uid) => S.users.find((u) => u.id === uid)?.email || "—";
+
+  const days = {};
+  valid.forEach((o) => (days[ymd(o.createdAt)] ??= []).push(o));
+  const dayRows = Object.entries(days).sort((a, b) => b[0].localeCompare(a[0])).map(([d, os]) => ({
+    d, n: os.length, inc: os.filter((o) => o.status === "entregado").reduce((s, o) => s + (o.total || 0), 0), st: stats(os),
+  }));
+
+  const dishes = {};
+  done.forEach((o) => o.items.forEach((i) => { const x = (dishes[i.name] ??= { name: i.name, qty: 0, inc: 0 }); x.qty += i.qty; x.inc += i.qty * i.price; }));
+  const top = Object.values(dishes).sort((a, b) => b.qty - a.qty).slice(0, 8);
+
+  const gW = {};
+  valid.filter((o) => wUid(o) && o.acceptedAt).forEach((o) => (gW[wUid(o)] ??= []).push(o));
+  const wRows = Object.entries(gW).map(([uid, os]) => ({ name: wName(os[0]), email: emailOf(uid), st: stats(os) })).sort((a, b) => b.st.taken - a.st.taken);
+  const gC = {};
+  valid.filter((o) => o.cookUid && o.readyAt && o.cookAt).forEach((o) => (gC[o.cookUid] ??= []).push(o));
+  const cRows = Object.entries(gC).map(([uid, os]) => ({ name: os[0].cookName, email: emailOf(uid), n: os.length, prep: avg(os.map((o) => o.readyAt - o.cookAt)) })).sort((a, b) => b.n - a.n);
+
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2>Historial</h2><button class="btn ghost sm" data-act="exportCsv">Descargar CSV</button></div>
+  <div class="card" style="margin:12px 0;display:grid;gap:10px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${[["today", "Hoy"], ["7", "7 días"], ["30", "30 días"], ["month", "Este mes"]].map(([k, l]) => `<button class="btn sm ghost" data-act="histPreset" data-k="${k}">${l}</button>`).join("")}</div>
+    <div class="row"><label class="lbl" style="margin:0">Desde<input type="date" value="${h.from}" data-change="histRange" data-r="from"></label>
+    <label class="lbl" style="margin:0">Hasta<input type="date" value="${h.to}" data-change="histRange" data-r="to"></label></div>
+    <p class="muted">Se guardan todos los pedidos; aquí eliges qué días ver. No incluye los datos de ejemplo.</p>
+  </div>
+  <div class="kpis">
+    <div class="kpi hl"><span>Pedidos</span><b>${valid.length}</b><small>${canceled} cancelado(s)</small></div>
+    <div class="kpi"><span>Ingresos</span><b>${money(income)}</b><small>${done.length} entregado(s)</small></div>
+    <div class="kpi"><span>Ticket promedio</span><b>${done.length ? money(income / done.length) : "—"}</b></div>
+    <div class="kpi"><span>Descuentos otorgados</span><b>${money(disc)}</b></div>
+  </div>
+  <div class="kpis" style="margin-top:10px">
+    <div class="kpi"><span>Calificación</span><b>${dash(st.avgRating, (v) => v.toFixed(1) + " ★")}</b><small>${st.nRatings} reseñas</small></div>
+    <div class="kpi"><span>Respuesta promedio</span><b>${dash(st.avgWait, fmtDur)}</b><small>meta ${fmtDur(SLA)}</small></div>
+    <div class="kpi ${st.slaPct != null && st.slaPct < 80 ? "bad" : ""}"><span>Tomados en meta</span><b>${dash(st.slaPct, (v) => v + "%")}</b></div>
+    <div class="kpi"><span>Prep. promedio</span><b>${dash(st.avgPrep, fmtDur)}</b></div>
+  </div>
+  <div class="two" style="margin-top:14px">
+    <div><h2 class="sec">Por día</h2><div class="card tblwrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Pedidos</th><th>Ingresos</th><th>Resp.</th><th>★</th></tr></thead><tbody>
+      ${dayRows.map((r) => `<tr><td><b>${dmy(dayStart(r.d))}</b></td><td>${r.n}</td><td>${money(r.inc)}</td><td>${dash(r.st.avgWait, fmtDur)}</td><td>${dash(r.st.avgRating, (v) => v.toFixed(1))}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Sin pedidos en este rango</td></tr>`}
+    </tbody></table></div></div>
+    <div><h2 class="sec">Platos más pedidos</h2><div class="card tblwrap"><table class="tbl"><thead><tr><th>Plato</th><th>Cant.</th><th>Ventas</th></tr></thead><tbody>
+      ${top.map((d) => `<tr><td><b>${esc(d.name)}</b></td><td>${d.qty}</td><td>${money(d.inc)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Sin datos</td></tr>`}
+    </tbody></table></div></div>
+  </div>
+  <div class="two">
+    <div><h2 class="sec">Meseros</h2><div class="card tblwrap"><table class="tbl"><thead><tr><th>Mesero</th><th>Pedidos</th><th>Resp.</th><th>En meta</th><th>★</th></tr></thead><tbody>
+      ${wRows.map((r) => `<tr><td><b>${esc(first(r.name))}</b><div class="muted">${esc(r.email)}</div></td><td>${r.st.taken}</td><td>${dash(r.st.avgWait, fmtDur)}</td><td>${dash(r.st.slaPct, (v) => v + "%")}</td><td>${dash(r.st.avgRating, (v) => v.toFixed(1))}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Sin datos</td></tr>`}
+    </tbody></table></div></div>
+    <div><h2 class="sec">Cocina</h2><div class="card tblwrap"><table class="tbl"><thead><tr><th>Cocinero</th><th>Pedidos</th><th>Prep.</th></tr></thead><tbody>
+      ${cRows.map((r) => `<tr><td><b>${esc(first(r.name))}</b><div class="muted">${esc(r.email)}</div></td><td>${r.n}</td><td>${dash(r.prep, fmtDur)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Sin datos</td></tr>`}
+    </tbody></table></div></div>
+  </div>`;
+}
 function adminEquipo() {
   const staff = [...S.staff].sort((a, b) => a.id.localeCompare(b.id));
   const roleOpts = (cur) => ["mesero", "cocinero", "moderador", "admin"].map((r) => `<option value="${r}" ${r === cur ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("");
@@ -826,6 +915,13 @@ const A = {
     catch (e) { toast("Error al entrar como invitado: " + e.message, "bad"); }
   },
   logout: () => data.logout(),
+  toggleBiz() {
+    if (!S.isOwner) return;
+    const open = !isOpen();
+    if (!confirm(open ? "¿Abrir el negocio y habilitar los pedidos?" : "¿Cerrar el negocio? Se bloquearán los pedidos nuevos hasta que lo vuelvas a abrir.")) return;
+    data.set("settings", "business", { open, by: S.user.email, at: data.stamp() })
+      .then(() => toast(open ? "Negocio abierto" : "Negocio cerrado", "ok")).catch(fail);
+  },
   notif: () => Notification.requestPermission().then(render),
   resetPass() {
     const email = prompt("Escribe tu correo para enviarte el enlace de recuperación:");
@@ -840,7 +936,10 @@ const A = {
     S.tab = d.t; render(); scrollTo(0, 0);
     if (S.role === "cliente" && d.t === "ayuda" && S.myChat?.unreadClient) data.set("chats", S.user.uid, { unreadClient: false }).catch(() => {});
   },
-  add(d) { S.cart[d.id] = (S.cart[d.id] || 0) + 1; render(); },
+  add(d) {
+    if (!isOpen()) return toast("El negocio está cerrado", "bad");
+    S.cart[d.id] = (S.cart[d.id] || 0) + 1; render();
+  },
   sub(d) { S.cart[d.id] = (S.cart[d.id] || 1) - 1; if (S.cart[d.id] <= 0) delete S.cart[d.id]; render(); },
   openCart, closeModal,
   backdrop(d, el, e) { if (e.target === el) closeModal(); },
@@ -897,6 +996,28 @@ const A = {
   },
   unban: (d) => data.remove("banned", d.email).catch(fail),
   applyLoyalty(d) { setLoyalty(d.uid, d.email, d.name, Number(d.pct)); },
+  histPreset(d) {
+    const t = now(), to = ymd(t);
+    const from = d.k === "today" ? to : d.k === "month" ? ymd(new Date(new Date(t).getFullYear(), new Date(t).getMonth(), 1).getTime()) : ymd(t - (Number(d.k) - 1) * 86400000);
+    S.hist = { from, to }; render();
+  },
+  exportCsv() {
+    const os = histOrders().sort(byCreated);
+    if (!os.length) return toast("No hay pedidos en ese rango", "bad");
+    const q = (v) => { let s = String(v ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
+    const head = ["Fecha", "Hora", "Mesa", "Cliente", "Estado", "Productos", "Subtotal", "Descuento %", "Total", "Mesero", "Cocinero", "Espera (s)", "Preparación (s)", "Calificación"];
+    const rows = os.map((o) => [
+      ymd(o.createdAt), hm(o.createdAt), o.mesa, o.customerName, o.status, o.items.map((i) => `${i.qty}x ${i.name}`).join(" | "),
+      o.subtotal ?? o.total, o.discount || 0, o.total, wName(o), o.cookName || "",
+      o.acceptedAt ? Math.round((o.acceptedAt - o.createdAt) / 1000) : "", o.readyAt && o.cookAt ? Math.round((o.readyAt - o.cookAt) / 1000) : "", o.review?.rating ?? "",
+    ]);
+    const csv = "﻿" + [head, ...rows].map((r) => r.map(q).join(",")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    a.download = `historial_${histRange().from}_${histRange().to}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  },
   seedDemo,
   async clearDemo() {
     for (const o of S.orders.filter((x) => x.demo)) await data.remove("orders", o.id).catch(fail);
@@ -914,6 +1035,13 @@ const C = {
   role: (d, el) => data.set("staff", d.email, { role: el.value }).catch(fail),
   loyalty: (d, el) => setLoyalty(d.uid, d.email, d.name, Number(el.value)),
   rvFilter: (d, el) => { S.rvFilter = el.value; render(); },
+  histRange: (d, el) => {
+    if (!el.value) return;
+    const h = { ...histRange(), [d.r]: el.value };
+    if (d.r === "from" && h.from > h.to) h.to = h.from;
+    if (d.r === "to" && h.to < h.from) h.from = h.to;
+    S.hist = h; render();
+  },
 };
 
 const F = {
@@ -1015,6 +1143,7 @@ const F = {
   },
 
   async placeOrder(f) {
+    if (!isOpen()) { closeModal(); return toast("El negocio acaba de cerrar. No se reciben pedidos por ahora.", "bad"); }
     const v = new FormData(f);
     const lines = cartLines();
     if (!lines.length) return;
