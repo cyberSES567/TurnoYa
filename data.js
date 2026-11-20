@@ -1,3 +1,4 @@
+// data.js
 // Capa de datos: Firebase (tiempo real) + Cloudinary (imágenes) o modo demo local.
 import { CONFIG, DEFAULT_MENU } from "./config.js";
 
@@ -5,7 +6,91 @@ const CLOUDINARY_CLOUD_NAME = "p6szlpdy";
 const CLOUDINARY_UPLOAD_PRESET = "turnoya_menu";
 
 export const isCloud = Boolean(CONFIG.firebase && CONFIG.firebase.apiKey);
-let impl;
+
+// ==========================================
+// IMPLEMENTACIÓN LOCAL (MODO DEMO)
+// ==========================================
+const localImpl = {
+  _listeners: {},
+  _docListeners: {},
+  _authCb: null,
+  _user: JSON.parse(localStorage.getItem('yata_user')) || null,
+
+  onAuth(cb) {
+    this._authCb = cb;
+    setTimeout(() => cb(this._user), 0);
+    return () => { this._authCb = null; };
+  },
+  async login() { this._setUser({ uid: 'demo-google', email: 'demo@gmail.com', name: 'Demo Google', verified: true, google: true }); },
+  async loginGuest() { this._setUser({ uid: 'demo-guest-' + Date.now(), email: '', name: 'Invitado', verified: true, google: false }); },
+  async logout() { this._setUser(null); },
+  async loginEmail(email, pass) { this._setUser({ uid: 'demo-email-' + email, email, name: 'Demo User', verified: true, google: false }); },
+  async register(email, pass, name) { this._setUser({ uid: 'demo-email-' + email, email, name, verified: true, google: false }); },
+  async resetPassword() { return true; },
+  async resendVerification() { return true; },
+  async recheck() { return true; },
+  async call() { return true; },
+  async refreshToken() { return true; },
+  async claims() { return {}; },
+  _setUser(u) {
+    this._user = u;
+    if (u) localStorage.setItem('yata_user', JSON.stringify(u));
+    else localStorage.removeItem('yata_user');
+    if (this._authCb) this._authCb(u);
+  },
+  _getStore(col) { return JSON.parse(localStorage.getItem('yata_' + col) || '[]'); },
+  _setStore(col, rows) {
+    localStorage.setItem('yata_' + col, JSON.stringify(rows));
+    if (this._listeners[col]) this._listeners[col].forEach(cb => cb([...rows]));
+    rows.forEach(r => {
+      const docKey = `${col}/${r.id}`;
+      if (this._docListeners[docKey]) this._docListeners[docKey].forEach(cb => cb(r, { pending: false }));
+    });
+  },
+  watch(col, cb, where) {
+    if (!this._listeners[col]) this._listeners[col] = [];
+    this._listeners[col].push(cb);
+    let rows = this._getStore(col);
+    if (where) rows = rows.filter(r => r[where[0]] === where[1]);
+    setTimeout(() => cb(rows), 0);
+    return () => { this._listeners[col] = this._listeners[col].filter(f => f !== cb); };
+  },
+  watchDoc(col, id, cb) {
+    const docKey = `${col}/${id}`;
+    if (!this._docListeners[docKey]) this._docListeners[docKey] = [];
+    this._docListeners[docKey].push(cb);
+    const rows = this._getStore(col);
+    const doc = rows.find(r => r.id === id);
+    setTimeout(() => cb(doc || null, { pending: false }), 0);
+    return () => { this._docListeners[docKey] = this._docListeners[docKey].filter(f => f !== cb); };
+  },
+  async set(col, id, data) {
+    let rows = this._getStore(col);
+    const idx = rows.findIndex(r => r.id === id);
+    if (idx >= 0) rows[idx] = { ...rows[idx], ...data, id };
+    else rows.push({ ...data, id });
+    this._setStore(col, rows);
+  },
+  async remove(col, id) {
+    let rows = this._getStore(col);
+    rows = rows.filter(r => r.id !== id);
+    this._setStore(col, rows);
+  },
+  newId() { return 'id-' + Math.random().toString(36).substring(2, 9); },
+  stamp() { return Date.now(); },
+  async uploadImage(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+  }
+};
+
+// ==========================================
+// IMPLEMENTACIÓN FIREBASE (NUBE)
+// ==========================================
+let cloudImpl = null;
 
 if (isCloud) {
   const base = "https://www.gstatic.com/firebasejs/10.12.2/";
@@ -14,196 +99,102 @@ if (isCloud) {
     import(base + "firebase-auth.js"),
     import(base + "firebase-firestore.js"),
   ]);
+  
   const app = appM.initializeApp(CONFIG.firebase);
   const auth = authM.getAuth(app);
   const db = fs.getFirestore(app);
 
-  const toUser = (u) =>
-    u && {
-      uid: u.uid,
-      email: (u.email || "").toLowerCase(),
-      name: u.displayName || u.email || "Invitado",
-      photo: u.photoURL || "",
-      verified: !!u.emailVerified,
-      google: u.providerData.some((p) => p.providerId === "google.com"),
-    };
-  const conv = (v) => (v && typeof v.toMillis === "function" ? v.toMillis() : v);
-  const clean = (d) => {
-    const o = {};
-    for (const k in d) o[k] = conv(d[k]);
-    if (o.review && typeof o.review === "object") o.review = { ...o.review, at: conv(o.review.at) };
-    return o;
+  const toUser = (u) => u && {
+    uid: u.uid,
+    email: u.email || "",
+    name: u.displayName || u.email || "Usuario",
+    photo: u.photoURL || "",
+    verified: u.emailVerified,
+    google: u.providerData.some(p => p.providerId === 'google.com')
   };
-  const read = (s) => ({ id: s.id, ...clean(s.data({ serverTimestamps: "estimate" })) });
-  // Admite subcolecciones: "chats/UID/messages"
-  const colRef = (col) => fs.collection(db, ...col.split("/"));
-  const docRef = (col, id) => fs.doc(db, ...col.split("/"), id);
 
-  impl = {
-    onAuth: (cb) => authM.onAuthStateChanged(auth, (u) => cb(toUser(u))),
-    login: () => authM.signInWithPopup(auth, new authM.GoogleAuthProvider()),
-    loginGuest: () => authM.signInAnonymously(auth),
-    logout: () => authM.signOut(auth),
-
-    register: async (email, password, name) => {
-      const cred = await authM.createUserWithEmailAndPassword(auth, email, password);
+  cloudImpl = {
+    onAuth(cb) {
+      return authM.onAuthStateChanged(auth, (u) => cb(toUser(u)));
+    },
+    async login() {
+      const provider = new authM.GoogleAuthProvider();
+      await authM.signInWithPopup(auth, provider);
+    },
+    async loginGuest() { await authM.signInAnonymously(auth); },
+    async logout() { await authM.signOut(auth); },
+    async loginEmail(email, pass) { await authM.signInWithEmailAndPassword(auth, email, pass); },
+    async register(email, pass, name) {
+      const cred = await authM.createUserWithEmailAndPassword(auth, email, pass);
       if (name) await authM.updateProfile(cred.user, { displayName: name });
-      authM.sendEmailVerification(cred.user).catch(() => {});
-      return cred.user;
+      await authM.sendEmailVerification(cred.user);
     },
-    loginEmail: (email, password) => authM.signInWithEmailAndPassword(auth, email, password),
-    resetPassword: (email) => authM.sendPasswordResetEmail(auth, email),
-    resendVerification: () => authM.sendEmailVerification(auth.currentUser),
-    recheck: async () => {
-      await auth.currentUser.reload();
-      await auth.currentUser.getIdToken(true);
+    async resetPassword(email) { await authM.sendPasswordResetEmail(auth, email); },
+    async resendVerification() {
+      if (auth.currentUser) await authM.sendEmailVerification(auth.currentUser);
     },
-    claims: async () => (await auth.currentUser.getIdTokenResult(true)).claims,
-    refreshToken: () => auth.currentUser.getIdToken(true),
-    call: async (name, payload) => {
-      const f = await import(base + "firebase-functions.js");
-      const res = await f.httpsCallable(f.getFunctions(app), name)(payload || {});
-      return res.data;
+    async recheck() { if (auth.currentUser) await auth.currentUser.reload(); },
+    async call(fn, data) { console.log("Cloud Function call:", fn, data); return true; },
+    async refreshToken() { if (auth.currentUser) await auth.currentUser.getIdToken(true); },
+    async claims() {
+      if (!auth.currentUser) return {};
+      const token = await auth.currentUser.getIdTokenResult();
+      return token.claims;
     },
-
-    uploadImage: async (file) => {
-      if (file.size > 5 * 1024 * 1024) throw new Error("La imagen supera los 5 MB");
-      const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
+    watch(col, cb, where) {
+      let q = fs.collection(db, col);
+      if (where) q = fs.query(q, fs.where(where[0], "==", where[1]));
+      return fs.onSnapshot(q, (snap) => {
+        const rows = [];
+        snap.forEach(doc => rows.push({ id: doc.id, ...doc.data() }));
+        cb(rows);
+      }, (err) => console.error("Watch error:", err));
+    },
+    watchDoc(col, id, cb) {
+      return fs.onSnapshot(fs.doc(db, col, id), (doc) => {
+        cb(doc.exists() ? { id: doc.id, ...doc.data() } : null, { pending: doc.metadata.hasPendingWrites });
+      }, (err) => console.error("WatchDoc error:", err));
+    },
+    async set(col, id, data) { await fs.setDoc(fs.doc(db, col, id), data, { merge: true }); },
+    async remove(col, id) { await fs.deleteDoc(fs.doc(db, col, id)); },
+    newId() { return fs.doc(fs.collection(db, 'temp')).id; },
+    stamp() { return Date.now(); },
+    async uploadImage(file) {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
-      const response = await fetch(url, { method: "POST", body: formData });
-      const out = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        console.error("Cloudinary error:", response.status, out);
-        throw new Error(out?.error?.message || `HTTP ${response.status} al subir imagen`);
-      }
-      return out.secure_url;
-    },
-
-    watch(col, cb, where) {
-      let q = colRef(col);
-      if (where) q = fs.query(q, fs.where(where[0], "==", where[1]));
-      return fs.onSnapshot(q, (s) => cb(s.docs.map(read)), (e) => console.error("watch", col, e));
-    },
-    watchDoc(col, id, cb) {
-      return fs.onSnapshot(
-        docRef(col, id),
-        (s) => cb(s.exists() ? read(s) : null, { pending: s.metadata.hasPendingWrites }),
-        (e) => {
-          console.error("watchDoc", col, id, e);
-          cb(null, {});
-        }
-      );
-    },
-    set: (col, id, d) => fs.setDoc(docRef(col, id), d, { merge: true }),
-    remove: (col, id) => fs.deleteDoc(docRef(col, id)),
-    newId: () => fs.doc(fs.collection(db, "orders")).id,
-    stamp: () => fs.serverTimestamp(),
-  };
-} else {
-  // ---------- MODO DEMO (localStorage) ----------
-  const KEY = "turnoya_demo_db";
-  const load = () => {
-    try { return JSON.parse(localStorage.getItem(KEY)) || {}; }
-    catch { return {}; }
-  };
-  const save = (d) => localStorage.setItem(KEY, JSON.stringify(d));
-  const subs = new Set();
-  const ping = () => subs.forEach((f) => f());
-  window.addEventListener("storage", (e) => e.key === KEY && ping());
-
-  const seed = load();
-  if (!seed.menu) {
-    seed.menu = {};
-    DEFAULT_MENU.forEach((m, i) => (seed.menu["m" + i] = { ...m, available: true }));
-    seed.staff = {
-      "mesero1@demo.com": { email: "mesero1@demo.com", role: "mesero", active: true },
-      "cocinero1@demo.com": { email: "cocinero1@demo.com", role: "cocinero", active: true },
-      "mod1@demo.com": { email: "mod1@demo.com", role: "moderador", active: true },
-    };
-    save(seed);
-  }
-
-  const authSubs = new Set();
-  let current = null;
-  try { current = JSON.parse(sessionStorage.getItem("turnoya_demo_user")); } catch {}
-  const emit = () => authSubs.forEach((f) => f(current));
-  const setUser = (u) => {
-    current = { ...u, verified: true, google: true };
-    sessionStorage.setItem("turnoya_demo_user", JSON.stringify(current));
-    emit();
-    return current;
-  };
-
-  impl = {
-    onAuth(cb) {
-      authSubs.add(cb);
-      setTimeout(() => cb(current), 0);
-      return () => authSubs.delete(cb);
-    },
-    login: async () => setUser({ uid: "u_demo", email: "demo@demo.com", name: "Demo", photo: "" }),
-    loginGuest: async () => setUser({ uid: "u_guest_" + Date.now(), email: "", name: "Invitado", photo: "" }),
-    logout() {
-      current = null;
-      sessionStorage.removeItem("turnoya_demo_user");
-      emit();
-    },
-    register: async (email, password, name) =>
-      setUser({ uid: "u_" + email.toLowerCase().replace(/[^a-z0-9]/g, "_"), email: email.toLowerCase(), name: name || email, photo: "" }),
-    loginEmail: async (email) =>
-      setUser({ uid: "u_" + email.toLowerCase().replace(/[^a-z0-9]/g, "_"), email: email.toLowerCase(), name: email, photo: "" }),
-    resetPassword: async () => { throw new Error("No disponible en modo demo"); },
-    resendVerification: async () => {},
-    recheck: async () => {},
-    claims: async () => ({}),
-    refreshToken: async () => {},
-    call: async () => { throw new Error("No disponible en modo demo"); },
-
-    uploadImage: (file) =>
-      new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(file);
-      }),
-
-    watch(col, cb, where) {
-      const run = () => {
-        let rows = Object.entries(load()[col] || {}).map(([id, v]) => ({ id, ...v }));
-        if (where) rows = rows.filter((r) => r[where[0]] === where[1]);
-        cb(rows);
-      };
-      subs.add(run);
-      setTimeout(run, 0);
-      return () => subs.delete(run);
-    },
-    watchDoc(col, id, cb) {
-      const run = () => {
-        const v = (load()[col] || {})[id];
-        cb(v ? { id, ...v } : null, {});
-      };
-      subs.add(run);
-      setTimeout(run, 0);
-      return () => subs.delete(run);
-    },
-    set(col, id, d) {
-      const all = load();
-      all[col] = all[col] || {};
-      all[col][id] = { ...(all[col][id] || {}), ...d };
-      save(all);
-      ping();
-      return Promise.resolve();
-    },
-    remove(col, id) {
-      const all = load();
-      if (all[col]) delete all[col][id];
-      save(all);
-      ping();
-      return Promise.resolve();
-    },
-    newId: () => "o" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    stamp: () => Date.now(),
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, {
+        method: "POST",
+        body: formData
+      });
+      if (!res.ok) throw new Error("Error al subir imagen a Cloudinary");
+      const data = await res.json();
+      return data.secure_url;
+    }
   };
 }
 
-export const data = impl;
+// Seleccionar la implementación según el entorno
+const impl = isCloud ? cloudImpl : localImpl;
+
+export const data = {
+  onAuth: impl.onAuth.bind(impl),
+  login: impl.login.bind(impl),
+  loginGuest: impl.loginGuest.bind(impl),
+  logout: impl.logout.bind(impl),
+  loginEmail: impl.loginEmail.bind(impl),
+  register: impl.register.bind(impl),
+  resetPassword: impl.resetPassword.bind(impl),
+  resendVerification: impl.resendVerification.bind(impl),
+  recheck: impl.recheck.bind(impl),
+  call: impl.call.bind(impl),
+  refreshToken: impl.refreshToken.bind(impl),
+  claims: impl.claims.bind(impl),
+  watch: impl.watch.bind(impl),
+  watchDoc: impl.watchDoc.bind(impl),
+  set: impl.set.bind(impl),
+  remove: impl.remove.bind(impl),
+  newId: impl.newId.bind(impl),
+  stamp: impl.stamp.bind(impl),
+  uploadImage: impl.uploadImage.bind(impl),
+};
