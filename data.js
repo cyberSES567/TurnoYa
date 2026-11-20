@@ -94,15 +94,17 @@ let cloudImpl = null;
 
 if (isCloud) {
   const base = "https://www.gstatic.com/firebasejs/10.12.2/";
-  const [appM, authM, fs] = await Promise.all([
+  const [appM, authM, fs, fnM] = await Promise.all([
     import(base + "firebase-app.js"),
     import(base + "firebase-auth.js"),
     import(base + "firebase-firestore.js"),
+    import(base + "firebase-functions.js"),
   ]);
-  
+
   const app = appM.initializeApp(CONFIG.firebase);
   const auth = authM.getAuth(app);
   const db = fs.getFirestore(app);
+  const functions = fnM.getFunctions(app);
 
   const toUser = (u) => u && {
     uid: u.uid,
@@ -134,7 +136,11 @@ if (isCloud) {
       if (auth.currentUser) await authM.sendEmailVerification(auth.currentUser);
     },
     async recheck() { if (auth.currentUser) await auth.currentUser.reload(); },
-    async call(fn, data) { console.log("Cloud Function call:", fn, data); return true; },
+    // Llama a una Cloud Function "callable" (sendOwnerCode, verifyOwnerCode...).
+    async call(fn, payload) {
+      const res = await fnM.httpsCallable(functions, fn)(payload || {});
+      return res.data;
+    },
     async refreshToken() { if (auth.currentUser) await auth.currentUser.getIdToken(true); },
     async claims() {
       if (!auth.currentUser) return {};
