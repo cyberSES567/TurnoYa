@@ -130,8 +130,14 @@ const suggestedPct = (n) => Math.min(CONFIG.loyaltyMax, Math.floor(n / CONFIG.lo
 
 /* ====================== precios y ofertas ====================== */
 const activeOffers = () => S.offers.filter((o) => o.active !== false);
-const offerFor = (id) => activeOffers().find((o) => o.menuId === id && o.offerPrice != null && o.offerPrice !== "");
-const priceOf = (m) => { const o = offerFor(m.id); return o ? Number(o.offerPrice) : m.price; };
+const offerFor = (id) => activeOffers().find((o) => o.menuId === id);
+const priceOf = (m) => {
+  const o = offerFor(m.id);
+  if (!o) return m.price;
+  if (o.type === "pct") return r2(m.price * (1 - (o.discountPct || 0) / 100));
+  if (o.type === "2x1") return m.price; // El precio unitario se mantiene, el descuento se hace en el carrito
+  return Number(o.offerPrice ?? m.price);
+};
 const discPct = () => (S.role === "cliente" && S.user?.email ? Number(S.myLoyalty?.discount || 0) : 0);
 function ratingMap() {
   const m = {};
@@ -440,8 +446,17 @@ const teamView = () => `<h2 style="margin-bottom:12px">Chat del equipo</h2>${cha
 
 /* ====================== CLIENTE ====================== */
 const cartLines = () =>
-  Object.entries(S.cart).map(([id, qty]) => { const m = S.menu.find((x) => x.id === id); return m && { id, name: m.name, price: priceOf(m), qty }; }).filter(Boolean);
-
+  Object.entries(S.cart).map(([id, qty]) => {
+    const m = S.menu.find((x) => x.id === id);
+    if (!m) return null;
+    const o = offerFor(id);
+    let lineTotal = priceOf(m) * qty;
+    if (o && o.type === "2x1") {
+      const free = Math.floor(qty / 2);
+      lineTotal = (qty - free) * m.price; // Lleva 2, paga 1
+    }
+    return { id, name: m.name, price: priceOf(m), qty, lineTotal };
+  }).filter(Boolean);
 function clienteView() {
   return ({ menu: menuView, ofertas: ofertasView, resenas: resenasView, pedidos: misPedidos, ayuda: ayudaView }[S.tab] || menuView)();
 }
@@ -468,11 +483,15 @@ function dishCard(m, rm) {
     ? `<div class="qty"><button data-act="sub" data-id="${esc(m.id)}">−</button><b>${q}</b><button class="p" data-act="add" data-id="${esc(m.id)}">+</button></div>`
     : `<button class="btn sm" data-act="add" data-id="${esc(m.id)}">Agregar</button>`;
   const visual = m.imageUrl ? `<img src="${esc(m.imageUrl)}" alt="${esc(m.name)}" class="dish-img">` : `<div class="emo">${esc(m.emoji || "🍽️")}</div>`;
-  const offer = offerFor(m.id);
-  const price = offer ? `<s>${money(m.price)}</s> ${money(priceOf(m))}` : money(m.price);
+   const offer = offerFor(m.id);
+  let price = money(m.price);
+  if (offer) {
+    if (offer.type === "2x1") price = `${money(m.price)} <span class="chip ok">2x1</span>`;
+    else if (offer.type === "pct") price = `<s>${money(m.price)}</s> ${money(priceOf(m))}`;
+    else price = `<s>${money(m.price)}</s> ${money(offer.offerPrice)}`;
+  }
   const r = rm[m.id];
   return `<div class="dish ${off ? "off" : ""}">${visual}<div class="dn">${esc(m.name)}</div><div class="dp">${price}</div>${r ? `<div class="rt"><span class="stars">★</span> ${(r.s / r.n).toFixed(1)} (${r.n})</div>` : ""}${ctl}</div>`;
-}
 function ofertasView() {
   const list = activeOffers();
   if (!list.length) return `<h2>Ofertas</h2><div class="empty" style="margin-top:12px">Por ahora no hay ofertas activas. ¡Vuelve pronto!</div>`;
@@ -893,9 +912,19 @@ function adminEquipo() {
 function adminMenu() {
   const items = [...S.menu].sort((a, b) => (a.category || "").localeCompare(b.category || ""));
   return `<h2>Menú</h2>
-  <form class="card" style="margin:12px 0;display:grid;gap:8px" data-form="addMenu">
+   <form class="card" style="margin:12px 0;display:grid;gap:8px" data-form="addMenu">
     <div class="row"><input id="mnName" name="name" required placeholder="Nombre del plato" maxlength="40"></div>
-    <div class="row"><input id="mnPrice" name="price" type="number" step="0.1" min="0" required placeholder="Precio"><input id="mnCat" name="category" placeholder="Categoría (Platos…)" maxlength="20"></div>
+    <div class="row">
+      <input id="mnPrice" name="price" type="number" step="0.1" min="0" required placeholder="Precio">
+      <select id="mnCat" name="category">
+        <option value="Platos">Platos</option>
+        <option value="Bebidas">Bebidas</option>
+        <option value="Postres">Postres</option>
+        <option value="Entradas">Entradas</option>
+        <option value="Combos">Combos</option>
+        <option value="Otros">Otros</option>
+      </select>
+    </div>
     <label class="lbl" style="margin:0">Foto del plato (opcional)<input name="image" type="file" accept="image/*"></label>
     <button class="btn">Agregar al menú</button></form>
   <div class="card">${items.map((m) => `<div class="item"><div style="display:flex;align-items:center;gap:12px">
