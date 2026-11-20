@@ -1,9 +1,8 @@
 // ============================================================
-//  CONFIGURACIÓN DE TURNOYA
+//  CONFIGURACIÓN DE yaTA!
 // ============================================================
 
 export const CONFIG = {
-  // Datos reales de tu proyecto de Firebase (turnoya-c49a0)
   firebase: {
     apiKey: "AIzaSyCHJjVIKvPCKa9Yy54_0nu0jNZqcFwO_Do",
     authDomain: "turnoya-c49a0.firebaseapp.com",
@@ -14,17 +13,26 @@ export const CONFIG = {
     measurementId: "G-KFM9PVBKVC"
   },
 
-  // ⚠️ IMPORTANTE: Este correo debe ser EXACTAMENTE el mismo que pusiste en las reglas de Firestore.
+  // ⚠️ Debe ser EXACTAMENTE igual al correo de firestore.rules (2 lugares) y a functions/index.js.
   ownerEmail: "adminnegocio1923@gmail.com",
+
+  // Verificación por código al Gmail del dueño. Déjalo en false hasta desplegar
+  // las Cloud Functions (ver owner-2fa-functions.js); si no, el dueño quedaría bloqueado.
+  ownerTwoFactor: false,
 
   restaurantName: "Sabor Express",
   currency: "S/",
 
-  // Meta: un pedido debe ser TOMADO en menos de este tiempo (segundos).
+  // Meta: un pedido debe ser TOMADO por un mesero en menos de este tiempo (segundos).
   acceptSlaSeconds: 180,
 
   // Tiempo de espera típico SIN el sistema (minutos).
   baselineWaitMin: 8,
+
+  // Fidelidad: cada N pedidos entregados sugiere +STEP% de descuento, hasta MAX%.
+  loyaltyEvery: 5,
+  loyaltyStep: 5,
+  loyaltyMax: 50,
 };
 
 export const DEFAULT_MENU = [
