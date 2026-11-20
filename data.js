@@ -106,6 +106,21 @@ if (isCloud) {
   const db = fs.getFirestore(app);
   const functions = fnM.getFunctions(app);
 
+  // Las reglas exigen hora del servidor (createdAt == request.time), así que stamp() devuelve
+  // serverTimestamp(). Al leer, convertimos los Timestamp de Firestore a milisegundos (número),
+  // que es lo que espera app.js. Con "estimate" se ve la hora aun antes de que el servidor confirme.
+  const fixTs = (v) => {
+    if (v && typeof v.toMillis === "function") return v.toMillis();
+    if (Array.isArray(v)) return v.map(fixTs);
+    if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) {
+      const o = {};
+      for (const k in v) o[k] = fixTs(v[k]);
+      return o;
+    }
+    return v;
+  };
+  const readDoc = (doc) => fixTs(doc.data({ serverTimestamps: "estimate" }));
+
   const toUser = (u) => u && {
     uid: u.uid,
     email: u.email || "",
@@ -152,19 +167,19 @@ if (isCloud) {
       if (where) q = fs.query(q, fs.where(where[0], "==", where[1]));
       return fs.onSnapshot(q, (snap) => {
         const rows = [];
-        snap.forEach(doc => rows.push({ id: doc.id, ...doc.data() }));
+        snap.forEach(doc => rows.push({ id: doc.id, ...readDoc(doc) }));
         cb(rows);
       }, (err) => console.error("Watch error:", err));
     },
     watchDoc(col, id, cb) {
       return fs.onSnapshot(fs.doc(db, col, id), (doc) => {
-        cb(doc.exists() ? { id: doc.id, ...doc.data() } : null, { pending: doc.metadata.hasPendingWrites });
+        cb(doc.exists() ? { id: doc.id, ...readDoc(doc) } : null, { pending: doc.metadata.hasPendingWrites });
       }, (err) => console.error("WatchDoc error:", err));
     },
     async set(col, id, data) { await fs.setDoc(fs.doc(db, col, id), data, { merge: true }); },
     async remove(col, id) { await fs.deleteDoc(fs.doc(db, col, id)); },
     newId() { return fs.doc(fs.collection(db, 'temp')).id; },
-    stamp() { return Date.now(); },
+    stamp() { return fs.serverTimestamp(); },
     async uploadImage(file) {
       const formData = new FormData();
       formData.append("file", file);
