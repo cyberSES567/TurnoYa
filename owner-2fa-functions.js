@@ -1,20 +1,4 @@
 // ============================================================
-//  Código de verificación por Gmail para el DUEÑO (2FA real, validado en el servidor)
-//  Guárdalo como  functions/index.js  dentro de tu proyecto Firebase.
-//
-//  Requisitos:
-//   - Plan Blaze de Firebase (las Cloud Functions no se despliegan en Spark).
-//   - Una cuenta Gmail con verificación en 2 pasos y una "contraseña de aplicación".
-//   - functions/package.json:
-//       { "engines": { "node": "20" },
-//         "dependencies": { "firebase-admin": "^12.0.0", "firebase-functions": "^5.0.0", "nodemailer": "^6.9.0" } }
-//   - Secretos:
-//       firebase functions:secrets:set GMAIL_USER
-//       firebase functions:secrets:set GMAIL_APP_PASSWORD
-//   - Desplegar:  firebase deploy --only functions
-//   - Después: en config.js pon ownerTwoFactor: true y en firestore.rules cambia
-//     ownerCode() para que devuelva:  request.auth.token.get('o2', 0) > request.time.toMillis()
-// ============================================================
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
