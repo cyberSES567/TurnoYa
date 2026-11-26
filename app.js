@@ -60,7 +60,7 @@ const S = {
   tab: null, cart: {}, mesa: new URLSearchParams(location.search).get("mesa") || "", rv: null, etaFor: null, rvFilter: "", selMsgs: new Set(),
 };
 let authUnsubs = [], roleUnsubs = [], threadUnsub = null;
-let seen = null, prevStatus = {}, lateAlerted = new Set(), seeded = false, seq = 0;
+let seen = null, prevStatus = {}, prevRobot = {}, lateAlerted = new Set(), seeded = false, seq = 0;
 let chatSeen = null, prevChat = {}, teamSeen = null, threadSeen = null;
 const now = () => Date.now() + S.offset;
 const startOfDay = () => { const d = new Date(now()); d.setHours(0, 0, 0, 0); return d.getTime(); };
@@ -177,7 +177,7 @@ data.onAuth((user) => {
     user, role: null, gate: null, loading: !!user, cart: {}, orders: [], menu: [], staff: [], banned: [], users: [], offers: [], reviews: [],
     chats: [], loyaltyAll: [], team: [], thread: [], myLoyalty: null, myChat: null, chatWith: null, biz: null, offset: 0, isOwner: false, selMsgs: new Set(),
   });
-  seen = null; prevStatus = {}; lateAlerted = new Set(); seeded = false;
+  seen = null; prevStatus = {}; prevRobot = {}; lateAlerted = new Set(); seeded = false;
   closeModal();
   if (!user) return render();
 
@@ -214,7 +214,7 @@ data.onAuth((user) => {
 function startRole() {
   stopRole();
   Object.assign(S, { orders: [], menu: [], staff: [], banned: [], users: [], offers: [], reviews: [], chats: [], loyaltyAll: [], team: [], thread: [], myLoyalty: null, myChat: null, chatWith: null });
-  seen = null; prevStatus = {}; chatSeen = null; prevChat = {}; teamSeen = null; threadSeen = null;
+  seen = null; prevStatus = {}; prevRobot = {}; chatSeen = null; prevChat = {}; teamSeen = null; threadSeen = null;
   S.tab = { admin: "resumen", moderador: "clientes", mesero: "espera", cocinero: "cola", cliente: "menu" }[S.role] || null;
   if (!S.role || S.role === "baneado") return;
   const w = (col, key, where, after) =>
@@ -250,10 +250,11 @@ function onOrders(rows) {
   if (seen === null) {
     seen = new Set(rows.map((o) => o.id));
     prevStatus = Object.fromEntries(rows.map((o) => [o.id, o.status]));
+    prevRobot = Object.fromEntries(rows.map((o) => [o.id, Boolean(o.robotAt)]));
     return;
   }
   for (const o of rows) {
-    const p = prevStatus[o.id], isNew = !seen.has(o.id);
+    const p = prevStatus[o.id], isNew = !seen.has(o.id), hadRobot = prevRobot[o.id];
     if (S.role === "mesero") {
       if (isNew && o.status === "espera") alertUser("Nuevo pedido", `Mesa ${o.mesa} · ${o.items.length} producto(s)`, "new");
       if (!isNew && p !== o.status) {
@@ -262,14 +263,20 @@ function onOrders(rows) {
       }
     } else if (S.role === "cocinero") {
       if (o.status === "cocina" && p !== "cocina") alertUser("Nuevo pedido en cola", `Mesa ${o.mesa} · ${o.items.length} producto(s)`, "new");
-    } else if (S.role === "cliente" && p && p !== o.status) {
-      if (o.status === "cocina") alertUser("Pedido enviado a cocina", `${first(o.waiterName) || "Tu mesero"} ya envió tu pedido.`, "ok");
-      if (o.status === "estimado") alertUser("Cocina lo confirmó", `Tiempo estimado: ~${o.etaMin} min.`, "ok");
-      if (o.status === "preparando") alertUser("Preparando tu pedido", "Tu pedido ya está en preparación.", "ok");
-      if (o.status === "listo") alertUser("¡Tu pedido está listo!", "Pronto llegará a tu mesa.", "ok");
+    } else if (S.role === "cliente") {
+      if (p && p !== o.status) {
+        if (o.status === "cocina") alertUser("Pedido enviado a cocina", `${first(o.waiterName) || "Tu mesero"} ya envió tu pedido.`, "ok");
+        if (o.status === "estimado") alertUser("Cocina lo confirmó", `Tiempo estimado: ~${o.etaMin} min.`, "ok");
+        if (o.status === "preparando") alertUser("Preparando tu pedido", "Tu pedido ya está en preparación.", "ok");
+        if (o.status === "listo") alertUser("¡Tu pedido está listo!", "Pronto llegará a tu mesa.", "ok");
+      }
+      if (!hadRobot && o.robotAt && o.status === "listo") {
+        alertUser("🤖 ¡Robot en camino!", `Un robot lleva tu pedido a la Mesa ${o.mesa}.`, "ok");
+      }
     }
     seen.add(o.id);
     prevStatus[o.id] = o.status;
+    prevRobot[o.id] = Boolean(o.robotAt);
   }
 }
 
@@ -349,6 +356,15 @@ function tick() {
       const eta = Number(el.dataset.eta);
       el.classList.toggle("late", eta > 0 && ms >= eta);
       el.classList.toggle("warn", eta > 0 && ms >= eta * 0.8 && ms < eta);
+    }
+  });
+  document.querySelectorAll("[data-robot]").forEach((el) => {
+    const p = Math.min(1, Math.max(0, (t - Number(el.dataset.robot)) / 20000)); // 20 s de recorrido
+    el.style.left = `calc(${p * 100}% - ${p * 2}rem)`;
+    const msg = el.parentElement?.nextElementSibling;
+    if (msg?.dataset.robotMsg && p >= 1) {
+      msg.textContent = "🍽️ ¡El robot llegó a tu mesa! Recoge tu pedido.";
+      msg.style.color = "var(--ok)";
     }
   });
 }
@@ -615,6 +631,7 @@ function myOrderCard(o) {
     <p class="muted">Tiempo transcurrido · <span class="timer" data-since="${o.createdAt}"><b>0:00</b></span></p>` : ""}
     ${o.etaMin && ["estimado", "preparando"].includes(o.status) ? `<p class="muted">Tiempo estimado de cocina: ~${o.etaMin} min</p>` : ""}
     ${wName(o) && active ? `<p class="muted">Te atiende ${esc(first(wName(o)))}</p>` : ""}
+    ${o.status === "listo" && o.robotAt ? `<div class="robot"><span data-robot="${o.robotAt}">🤖</span><i>🍽️</i></div><p class="muted" data-robot-msg="${o.robotAt}">¡Un robot lleva tu pedido a la mesa ${esc(o.mesa)}!</p>` : ""}
     <ul class="items">${o.items.map((i) => `<li>${i.qty}× ${esc(i.name)}${incl(i)}</li>`).join("")}</ul>
     ${o.discount ? `<div class="line dsc"><span>Descuento −${o.discount}%</span><span>−${money(r2((o.subtotal || o.total) - o.total))}</span></div>` : ""}
     <div class="line tot"><span>Mesa ${esc(o.mesa)}</span><b>${money(o.total)}</b></div>
@@ -697,7 +714,9 @@ function waiterCard(o) {
     cocina: `<span class="muted">En cola de cocina${pos ? ` · posición ${pos}` : ""}</span>`,
     estimado: `<span class="muted">Cocina estima ~${o.etaMin} min${o.cookName ? ` (${esc(first(o.cookName))})` : ""}</span><button class="btn" data-act="markPreparing" data-id="${esc(o.id)}">Marcar: preparando pedido</button>`,
     preparando: `<span class="muted">Preparando · estimado ~${o.etaMin || "?"} min</span>`,
-    listo: `<button class="btn ok" data-act="delivered" data-id="${esc(o.id)}">Marcar entregado</button>`,
+    listo: o.robotAt
+      ? `<span class="muted">🤖 Robot en camino a Mesa ${esc(o.mesa)}</span><button class="btn ok" data-act="delivered" data-id="${esc(o.id)}">Marcar entregado</button>`
+      : `<button class="btn" data-act="sendRobot" data-id="${esc(o.id)}">🤖 Enviar robot</button><button class="btn ok" data-act="delivered" data-id="${esc(o.id)}">Entregar yo</button>`,
   }[o.status];
   return `<article class="card order ${o.status === "listo" ? "deliver" : ""}">
     <div class="oh"><b>${o.status === "listo" ? `<span class="mesa">Llevar a Mesa ${esc(o.mesa)}</span>` : `Mesa ${esc(o.mesa)}`} <span class="muted">· #${short(o.id)}</span></b>
@@ -1124,6 +1143,11 @@ const A = {
       .then(() => { S.tab = "cocina"; render(); }).catch(fail);
   },
   markPreparing: (d) => data.set("orders", d.id, { status: "preparando", preparingAt: data.stamp() }).catch(fail),
+  sendRobot: (d) => {
+    const o = S.orders.find((x) => x.id === d.id);
+    if (!o || o.status !== "listo" || o.robotAt) return;
+    data.set("orders", d.id, { robotAt: data.stamp() }).then(() => toast(`🤖 Robot enviado a Mesa ${o.mesa}`, "ok")).catch(fail);
+  },
   delivered: (d) => data.set("orders", d.id, { status: "entregado", deliveredAt: data.stamp() }).catch(fail),
 
   // cocinero
